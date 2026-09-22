@@ -12,7 +12,7 @@ It is the application layer for a 12-week DevOps curriculum that takes a service
 | `APP_VERSION` | `0.1.0` | Version displayed on the home page. |
 | `LOG_LEVEL` | `info` | Diagnostic log level; request access records always emit at info. |
 | `CLAN_NAME` | `Urdnot` | Clan name displayed on the home page; read at request time. |
-| `CLAN_SECRET` | `shiagur` | Required value of `X-Clan-Secret` when creating a record; read at request time. |
+| `CLAN_SECRET` | `shiagur` | Required value of `X-Clan-Secret` when creating a record; read at request time. The default is for local development only; override it in any deployment. |
 
 ## Run locally
 
@@ -70,7 +70,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [app/ops/week1](app/ops/week1/README.md). Containers, Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. Containers, Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
 
 ## Tests
 
