@@ -1,0 +1,10 @@
+[Unit]
+Description=Week 1 local DNS exercise
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/urdnot-dns.conf --pid-file=
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

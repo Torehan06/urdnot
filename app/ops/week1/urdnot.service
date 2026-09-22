@@ -1,0 +1,19 @@
+[Unit]
+Description=Urdnot API
+After=network.target
+
+[Service]
+Type=simple
+User=urdnot
+Group=urdnot
+WorkingDirectory=/opt/urdnot
+EnvironmentFile=/etc/urdnot.env
+ExecStart=/opt/urdnot/app/.venv/bin/python -m app
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+base_url="${1:-http://127.0.0.1}"
+base_url="${base_url%/}"
+for endpoint in healthz readyz; do
+    if ! body="$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$base_url/$endpoint")"; then
+        printf 'FAIL %s/%s\n' "$base_url" "$endpoint" >&2
+        exit 1
+    fi
+    printf 'OK %s: %s\n' "$endpoint" "$body"
+done

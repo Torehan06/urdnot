@@ -70,7 +70,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository intentionally contains only the application and its documentation. Reverse-proxy configuration, containers, Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure are curriculum exercises to add separately.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [app/ops/week1](app/ops/week1/README.md). Containers, Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
 
 ## Tests
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+log_file="${1:-/var/log/nginx/urdnot.access.log}"
+if [[ ! -r "$log_file" ]]; then
+    printf 'Cannot read log: %s\n' "$log_file" >&2
+    exit 1
+fi
+awk '
+    { counts[$9]++; total++ }
+    END {
+        printf "Total requests: %d\n", total
+        for (status in counts) printf "HTTP %s: %d\n", status, counts[status]
+    }
+' "$log_file"
