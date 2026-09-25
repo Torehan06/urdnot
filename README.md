@@ -70,13 +70,23 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. Containers, Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
+
+## Run in a container
+
+```sh
+docker build -t urdnot-api:0.1.0 .
+docker run --rm -p 8000:8000 --stop-timeout 30 -e CLAN_SECRET="$(openssl rand -hex 16)" urdnot-api:0.1.0
+```
+
+The image runs as a non-root user, listens on `0.0.0.0:8000`, and reports health via `/healthz`. See [docs/week-02.md](docs/week-02.md) for the design.
 
 ## Tests
 
-From the repository root with the virtual environment active:
+`app/requirements.txt` holds runtime dependencies only; test tooling is in `app/requirements-dev.txt`. From the repository root with the virtual environment active:
 
 ```sh
+python -m pip install -r app/requirements-dev.txt
 python -m pytest app/tests -q
 ```
 

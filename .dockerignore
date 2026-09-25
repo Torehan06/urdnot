@@ -1,0 +1,13 @@
+# Allowlist: send the build only what the Dockerfile copies. New files at the
+# repo root (secrets, venvs, notes) stay out of the build context by default.
+*
+!app/
+
+# Inside app/, drop anything the runtime image doesn't need.
+app/tests/
+app/requirements-dev.txt
+app/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.env
