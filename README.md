@@ -70,7 +70,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. Compose with Postgres and Redis, CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
 
 ## Run in a container
 
@@ -80,6 +80,17 @@ docker run --rm -p 8000:8000 --stop-timeout 30 -e CLAN_SECRET="$(openssl rand -h
 ```
 
 The image runs as a non-root user, listens on `0.0.0.0:8000`, and reports health via `/healthz`. See [docs/week-02.md](docs/week-02.md) for the design.
+
+## Run with Postgres and Redis (Compose)
+
+```sh
+cp .env.example .env    # replace every value, e.g. with: openssl rand -hex 24
+docker compose up -d --build --wait
+curl -fsS localhost:8000/readyz
+docker compose down     # keeps data; `down -v` also deletes the pgdata and redisdata volumes
+```
+
+`.env` is git-ignored and only feeds Compose interpolation. `POSTGRES_PASSWORD` (required, URL-safe, because it is placed inside `DATABASE_URL`) and `CLAN_SECRET` (required) must be set. `CLAN_NAME`, `LOG_LEVEL`, and `REVISION` (image label) are optional. Compose sets the service's `DATABASE_URL` and `REDIS_URL` itself. Only the API is published, on `127.0.0.1:8000`. Postgres and Redis are reachable only on the Compose network. See [docs/week-03.md](docs/week-03.md) for the design.
 
 ## Tests
 
