@@ -65,7 +65,7 @@ services:
     # No ports: only services on this Compose network can reach Postgres.
 
   redis:
-    image: redis:8.10.2-trixie@sha256:6f81e8915c60b065a524e6967e0ad1c639ba6efa84d669f823683ea04d9150ee
+    image: redis:8.10.2-trixie@sha256:97ec88159e6d7cfb5ddef9015386087d58a912de80112f06ebdfa78fa5989901
     volumes:
       # The default RDB snapshot is written to /data, including on shutdown,
       # so the headbutt counter survives `docker compose down` and `up`.
