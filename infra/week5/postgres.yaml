@@ -1,0 +1,112 @@
+# Postgres as a single-replica StatefulSet with its own PersistentVolumeClaim.
+# A StatefulSet (not a Deployment) gives the Pod a stable name (postgres-0)
+# and keeps the same volume across restarts and rescheduling.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  # Headless: DNS "postgres" resolves straight to the Pod IP, and the
+  # StatefulSet's Pod also gets postgres-0.postgres.urdnot.svc.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+    spec:
+      # Postgres never talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      # The image's STOPSIGNAL is SIGINT (fast shutdown); the container
+      # runtime sends it instead of SIGTERM. A clean shutdown writes a
+      # checkpoint, so allow it time.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: urdnot
+            - name: POSTGRES_DB
+              value: urdnot
+            # Read only on first init of an empty volume. Changing the Secret
+            # later does not change the database password.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: urdnot-secrets
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            # Same path as compose.yaml: Postgres 18 keeps PGDATA at
+            # /var/lib/postgresql/18/docker, one level below this mount.
+            - name: data
+              mountPath: /var/lib/postgresql
+          # The entrypoint starts as root to fix volume ownership and then
+          # drops to the postgres user, so runAsNonRoot is not possible with
+          # the stock image. It never needs to gain privileges, though.
+          securityContext:
+            allowPrivilegeEscalation: false
+          # TCP, not the socket, for the same reason as in compose.yaml: the
+          # first-boot init server listens on the socket only.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+  # One PVC per replica, named data-postgres-0. It is not deleted when the
+  # StatefulSet is deleted, so `kubectl delete -k` keeps the data.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

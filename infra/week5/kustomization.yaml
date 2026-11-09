@@ -1,0 +1,53 @@
+# Week 5: urdnot-api, Postgres and Redis on Kubernetes.
+#
+#   cp infra/week5/secrets.env.example infra/week5/secrets.env   # fill in values
+#   kubectl apply -k infra/week5
+#   kubectl -n urdnot rollout status deploy/urdnot-api
+#
+# See infra/week5/README.md for the full runbook and docs/week-05.md for the
+# design notes.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Every namespaced object below lands in this namespace, so the manifests
+# themselves don't repeat it.
+namespace: urdnot
+
+# Added to every object's metadata only. Selectors stay as written in each
+# manifest, because a Deployment's selector is immutable after creation.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: urdnot
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redis.yaml
+  - api.yaml
+
+# Non-secret settings. Kustomize appends a hash of the contents to the name
+# (urdnot-config-<hash>) and rewrites every reference, so changing a value
+# here changes the Pod template and triggers a rolling update.
+configMapGenerator:
+  - name: urdnot-config
+    literals:
+      - CLAN_NAME=Urdnot
+      - LOG_LEVEL=info
+
+# Secrets come from a git-ignored file, like the Compose .env. Same hash
+# suffix behavior as the ConfigMap above.
+secretGenerator:
+  - name: urdnot-secrets
+    envs:
+      - secrets.env
+
+# The API image that CI published from main (commit 0b1eec1). The sha-<7>
+# tag says which commit it is; the digest makes the reference immutable, so
+# a re-pushed tag can't change what runs. The k8s job in ci.yml swaps this
+# for the image it just built from the commit under test.
+images:
+  - name: urdnot-api
+    newName: ghcr.io/torehan06/urdnot-api
+    newTag: sha-0b1eec1@sha256:cea8c200ef107551ea3b089b050247068e2f3e357e596274fb3f0d9e73c51eef
