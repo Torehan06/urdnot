@@ -54,7 +54,11 @@ The mapping from Compose to Kubernetes:
 
 ## Verification
 
-Run on 2026-11-09. Locally: rendering only (`kubectl kustomize`, client v1.35). The deployment itself ran in GitHub Actions on kind, Kubernetes v1.37.0 ([run 42634277728](https://github.com/Torehan06/urdnot/actions/runs/42634277728), `k8s` job, 1 min 32 s including cluster creation and the image build).
+Run on 2026-11-09, in two places: in CI on kind (amd64, the image built from the commit) and locally on Rancher Desktop's k3s (arm64, the pinned GHCR image). Both are described below.
+
+### CI on kind
+
+The deployment ran in GitHub Actions on kind, Kubernetes v1.37.0 ([run 42634277728](https://github.com/Torehan06/urdnot/actions/runs/42634277728), `k8s` job, 1 min 32 s including cluster creation and the image build).
 
 ```text
 $ kubectl kustomize infra/week5 | grep image:          # with a dummy secrets.env
@@ -93,7 +97,52 @@ smoke test passed against http://127.0.0.1:8000
 
 The Pod Security warnings name only `postgres` and `redis`. The API Pod passes the `restricted` profile, which confirms that `runAsNonRoot`, `readOnlyRootFilesystem` and the dropped capabilities work with the image. `storage=postgres, counter=redis` proves the Service DNS names and the `$(POSTGRES_PASSWORD)` expansion in `DATABASE_URL` work, and that the app didn't fall back to memory.
 
-**Not verified:** the pinned GHCR image running in a cluster (CI deploys the image it builds; only the pinned reference's existence was checked), an arm64 node, and behavior during a rollout under traffic.
+### Locally on k3s (arm64)
+
+Rancher Desktop 1.23.1, k3s v1.36.2, Apple silicon, `local-path` storage class. Every `kubectl` command used `--context rancher-desktop` explicitly.
+
+**Resources first.** Rancher Desktop's default VM (2 GB RAM, 2 CPUs) was too small. Postgres never became ready, the API server stopped answering (`TLS handshake timeout`), and `free -m` inside the VM showed 154 MB available with no swap and a load average of 5.6. After resizing the VM to 4 GB and 4 CPUs (`rdctl set --virtual-machine.memory-in-gb=4 --virtual-machine.number-cpus=4`), everything fit, with about 2.4 GB left over. The sum of this week's memory requests is only 576 Mi, but k3s itself, Traefik and the page cache need the rest.
+
+```text
+$ kubectl apply -k infra/week5            # same output and Pod Security warnings as in CI
+Pulled image "ghcr.io/torehan06/urdnot-api:sha-0b1eec1@sha256:cea8c200…" in 32.3s. Image size: 58356093 bytes.
+imageID: docker-pullable://ghcr.io/torehan06/urdnot-api@sha256:cea8c200…   # the arm64 variant, resolved from the index
+
+$ BASE_URL=http://127.0.0.1:18000 scripts/smoke-test.sh   # through kubectl port-forward
+ok   /healthz 200
+ok   /readyz 200
+ok   storage=postgres, counter=redis
+...
+smoke test passed against http://127.0.0.1:18000
+```
+
+That confirms the pinned published image itself runs, on arm64, without an `imagePullSecret`.
+
+**Zero-downtime rollout.** A `curl` loop ran in a Pod inside the namespace, calling `http://urdnot-api/api/hollows` every 50 ms for 75 s. `kubectl rollout restart deployment/urdnot-api` ran in the middle of it:
+
+```text
+deployment "urdnot-api" successfully rolled out
+ok=1096 bad=0
+```
+
+Not a single failed request while both Pods were replaced. This is the combination of `maxUnavailable: 0` (a new Pod is Ready before an old one stops), readiness gating, the 5 s `preStop` sleep, and the app's graceful SIGTERM handling.
+
+**Postgres outage** (`kubectl scale statefulset/postgres --replicas=0`, then back to 1):
+
+```text
+--- during outage
+urdnot-api-54fb5758b9-h8jnm   0/1   Running   0     104s
+urdnot-api-54fb5758b9-t5bj4   0/1   Running   0     101s
+urdnot-api-54fb5758b9-h8jnm ready=false        # EndpointSlice: no Pod gets traffic
+urdnot-api-54fb5758b9-t5bj4 ready=false
+--- after recovery
+urdnot-api-54fb5758b9-h8jnm   1/1   Running   0     2m3s
+urdnot-api-54fb5758b9-t5bj4   1/1   Running   0     2m
+```
+
+Both API Pods went unready and were taken out of the Service, but **0 restarts**: liveness checks `/healthz`, which has no dependencies. They came back on their own within 15 s of Postgres being Ready. The record written by the smoke test before the outage was still returned by `GET /api/hollows` afterwards, because the new `postgres-0` reattached the same PVC (`data-postgres-0`).
+
+**Not verified:** a multi-node cluster (the topology spread constraint and PodDisruptionBudget were never exercised by a real drain), and a Redis outage (same mechanism as Postgres, not run separately).
 
 ## What you should be able to explain in an interview
 
@@ -117,8 +166,8 @@ The Pod Security warnings name only `postgres` and `redis`. The API Pod passes t
 
 ## Assumptions and open items
 
-- **The local deployment was not run on this Mac.** The plan was Rancher Desktop's bundled k3s or minikube. Both failed because the Mac's data volume was full (about 180 MB free), which also stopped the Docker VM. Verification ran entirely in CI on kind (see above). Once there is free space, the runbook should be repeated locally, ideally on arm64 to exercise the arm64 image.
-- **Rollout behavior under traffic is not tested.** The CI smoke test goes through a port-forward, which tunnels to a single Pod and breaks when that Pod goes away. A real zero-downtime check needs a client inside the cluster (a `curl` loop in a Pod) during `rollout restart`.
+- **Rancher Desktop needs at least 4 GB for this stack.** With the default 2 GB VM, the node ran out of memory and the API server stopped responding (see Verification). Other local clusters (kind, minikube) need similar headroom.
+- **The CI rollout check is functional only.** CI's smoke test goes through a port-forward, which tunnels to a single Pod and breaks when that Pod goes away, so CI doesn't test zero-downtime rollouts. That was tested locally with an in-cluster client (see Verification). Adding the same loop to the `k8s` job would make it a regression test.
 - **Redis runs without AUTH**, as in Compose. Only Pods in the cluster can reach it, but without a NetworkPolicy that means *every* Pod in the cluster. A NetworkPolicy allowing only `urdnot-api` to reach `postgres:5432` and `redis:6379` is the next step once the cluster's CNI enforces policies.
 - **Changing `POSTGRES_PASSWORD` in `secrets.env` breaks the API on an existing cluster.** The Postgres image reads it only when initializing an empty volume. Rotate it with `ALTER ROLE` first, then update the Secret.
 - **Old generated ConfigMaps and Secrets pile up** with each change. They're harmless but not cleaned up.

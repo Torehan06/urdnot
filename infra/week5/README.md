@@ -13,7 +13,7 @@ Deploys `urdnot-api` (2 replicas), Postgres and Redis into the `urdnot` namespac
 
 ## Deploy
 
-Any cluster works: Rancher Desktop's k3s, kind, minikube. The image `ghcr.io/torehan06/urdnot-api` is public, so no `imagePullSecret` is needed. Always check the context first. `kubectl` acts on whichever cluster is current, and that can be a real cloud cluster.
+Any cluster works: Rancher Desktop's k3s, kind, minikube. The image `ghcr.io/torehan06/urdnot-api` is public, so no `imagePullSecret` is needed. The stack needs a node with at least 4 GB of memory. Rancher Desktop's default 2 GB VM runs out (Preferences → Virtual Machine, or `rdctl set --virtual-machine.memory-in-gb=4`). Always check the context first. `kubectl` acts on whichever cluster is current, and that can be a real cloud cluster.
 
 ```sh
 kubectl config current-context
