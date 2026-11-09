@@ -70,7 +70,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). CI/CD, Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
 
 ## Run in a container
 
@@ -102,3 +102,14 @@ python -m pytest app/tests -q
 ```
 
 Tests clear backend environment variables and need no running Postgres or Redis. They cover fallback endpoints, authentication, request-time configuration, metrics/logging, CPU work, and simulated configured-backend outages.
+
+## CI/CD
+
+GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. On `main`, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`. Run the same smoke test locally against a running stack:
+
+```sh
+set -a; . ./.env; set +a
+scripts/smoke-test.sh          # BASE_URL defaults to http://127.0.0.1:8000
+```
+
+See [docs/week-04.md](docs/week-04.md) for the design.

@@ -1,0 +1,150 @@
+# Week 4: CI/CD for urdnot-api.
+#
+#   test     unit tests on the runner's Python 3.12 (fast feedback, no Docker)
+#   smoke    build the image and run the full Compose stack, then hit it with
+#            scripts/smoke-test.sh (real Postgres and Redis)
+#   publish  only on main, after both pass: build linux/amd64 + linux/arm64 and
+#            push to ghcr.io/<owner>/urdnot-api
+#
+# Actions are pinned to a full commit SHA, like the image digests in the
+# Dockerfile: a tag such as v7 can be moved to different code, a SHA cannot.
+# The comment after each SHA is the release it points to; Dependabot
+# (.github/dependabot.yml) updates both.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default. Only the publish job asks for more.
+permissions:
+  contents: read
+
+# A new push to the same branch or PR cancels the older run. Runs on main are
+# never cancelled, so every merge gets its own published image.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job pushes with git, so don't leave the token in .git/config.
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements*.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r app/requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest app/tests -q
+
+  smoke:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # .env is git-ignored, so the runner has none. Throwaway values are
+      # generated per run: nothing outlives the job, so no GitHub secret is
+      # needed. add-mask hides them if they ever appear in a log line.
+      - name: Generate a throwaway .env
+        run: |
+          pg_password="$(openssl rand -hex 24)"
+          clan_secret="$(openssl rand -hex 24)"
+          echo "::add-mask::$pg_password"
+          echo "::add-mask::$clan_secret"
+          {
+            echo "POSTGRES_PASSWORD=$pg_password"
+            echo "CLAN_SECRET=$clan_secret"
+            echo "REVISION=${GITHUB_SHA::7}"
+          } > .env
+
+      - name: Validate compose.yaml
+        run: docker compose config --quiet
+
+      - name: Build and start the stack
+        run: docker compose up -d --build --wait --wait-timeout 120
+
+      - name: Run the smoke test
+        run: |
+          set -a; . ./.env; set +a
+          scripts/smoke-test.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose ps --all && docker compose logs --no-color
+
+      # always(): tear down even if a step above failed or the run was cancelled.
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  publish:
+    needs: [test, smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io with the job's GITHUB_TOKEN
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # GHCR image names must be lowercase; the owner "Torehan06" is not.
+      - name: Compute image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/urdnot-api" >> "$GITHUB_OUTPUT"
+
+      # QEMU lets the amd64 runner build the arm64 image (for Apple silicon and
+      # arm64 clusters later). The Dockerfile installs wheels only, so nothing
+      # is compiled under emulation.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags: sha-<7 chars> is immutable and is what deployments should use;
+      # main always points at the newest build of main.
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=main
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # The checked-out directory, so .dockerignore applies exactly as locally.
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          # The Dockerfile already sets OCI labels; only revision changes per build.
+          build-args: |
+            VERSION=0.1.0
+            REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
