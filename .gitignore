@@ -228,3 +228,6 @@ private/
 /AGENTS.md
 /CLAUDE.md
 CLAUDE.local.md
+
+# Week 5 Kubernetes secrets (see infra/week5/secrets.env.example)
+infra/week5/secrets.env

@@ -1,0 +1,165 @@
+# urdnot-api: a stateless Deployment with two replicas behind a ClusterIP
+# Service. The image is set in kustomization.yaml (`images:`), so the tag
+# lives in one place and an overlay can replace it.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: urdnot-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  # Old ReplicaSets kept for `kubectl rollout undo`.
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: urdnot-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Start one new Pod, wait until it is Ready, then stop one old Pod.
+      # Capacity never drops below 2 during a rollout.
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: urdnot-api
+        app.kubernetes.io/component: api
+    spec:
+      automountServiceAccountToken: false
+      # preStop (5 s) + draining in-flight requests, including a 10 s
+      # /api/charge. Matches stop_grace_period in compose.yaml.
+      terminationGracePeriodSeconds: 30
+      # Spread the replicas over nodes when there is more than one. On a
+      # single-node cluster this is a no-op (ScheduleAnyway).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: urdnot-api
+      securityContext:
+        # The Dockerfile's numeric USER 10001; runAsNonRoot can verify it.
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: urdnot-api
+          ports:
+            - name: http
+              containerPort: 8000
+          # The Dockerfile already sets HOST=0.0.0.0 and PORT=8000.
+          envFrom:
+            - configMapRef:
+                name: urdnot-config
+          env:
+            - name: CLAN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: urdnot-secrets
+                  key: CLAN_SECRET
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: urdnot-secrets
+                  key: POSTGRES_PASSWORD
+            # $(VAR) is expanded by Kubernetes from variables defined earlier
+            # in this list. "postgres" and "redis" are Service names in the
+            # same namespace.
+            - name: DATABASE_URL
+              value: postgresql://urdnot:$(POSTGRES_PASSWORD)@postgres:5432/urdnot
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # The root filesystem is read-only; give Python a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+          # Startup: up to 30 s for the process to answer at all. Liveness
+          # and readiness only start after it succeeds.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 1
+            failureThreshold: 30
+          # Liveness: is the process wedged? /healthz checks no dependencies,
+          # so a Postgres outage never restarts the API.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness: should this Pod get traffic? /readyz checks Postgres
+          # and Redis; a failing Pod is removed from the Service endpoints,
+          # not restarted.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            # On delete, the Pod is removed from the Service endpoints while
+            # SIGTERM is sent, in parallel. Waiting 5 s before SIGTERM lets
+            # kube-proxy stop routing new requests here first.
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # One Python process mostly uses one core (GIL), see README.
+              cpu: "1"
+              memory: 256Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+# Voluntary disruptions (node drain, cluster upgrade) may evict at most one
+# API Pod at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: urdnot-api

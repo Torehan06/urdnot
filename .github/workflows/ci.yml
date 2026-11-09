@@ -1,10 +1,12 @@
-# Week 4: CI/CD for urdnot-api.
+# Weeks 4-5: CI/CD for urdnot-api.
 #
 #   test     unit tests on the runner's Python 3.12 (fast feedback, no Docker)
 #   smoke    build the image and run the full Compose stack, then hit it with
 #            scripts/smoke-test.sh (real Postgres and Redis)
-#   publish  only on main, after both pass: build linux/amd64 + linux/arm64 and
-#            push to ghcr.io/<owner>/urdnot-api
+#   k8s      build the image, deploy infra/week5 to a throwaway kind cluster,
+#            and run the same smoke test through a port-forward (Week 5)
+#   publish  only on main, after all three pass: build linux/amd64 +
+#            linux/arm64 and push to ghcr.io/<owner>/urdnot-api
 #
 # Actions are pinned to a full commit SHA, like the image digests in the
 # Dockerfile: a tag such as v7 can be moved to different code, a SHA cannot.
@@ -95,8 +97,90 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  k8s:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      KIND_CLUSTER: urdnot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # kind runs a whole Kubernetes node as a Docker container on the runner.
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          wait: 120s
+
+      # Test this commit's code, not the image pinned in kustomization.yaml.
+      # kind nodes can't see the runner's Docker images, so load it into the
+      # node. The tag is not "latest", so imagePullPolicy is IfNotPresent and
+      # the node uses the loaded copy instead of trying a registry.
+      - name: Build the image and load it into kind
+        run: |
+          docker build -t urdnot-api:ci --build-arg REVISION="${GITHUB_SHA::7}" .
+          kind load docker-image urdnot-api:ci --name "$KIND_CLUSTER"
+
+      # Same idea as the smoke job's .env: throwaway values, masked in logs.
+      - name: Generate a throwaway secrets.env
+        run: |
+          pg_password="$(openssl rand -hex 24)"
+          clan_secret="$(openssl rand -hex 24)"
+          echo "::add-mask::$pg_password"
+          echo "::add-mask::$clan_secret"
+          {
+            echo "POSTGRES_PASSWORD=$pg_password"
+            echo "CLAN_SECRET=$clan_secret"
+          } > infra/week5/secrets.env
+
+      # A throwaway overlay on top of infra/week5 that only swaps the image.
+      # Everything else (probes, Secrets, volumes) is exactly what gets
+      # deployed for real.
+      - name: Create a CI overlay
+        run: |
+          mkdir .k8s-ci
+          cat > .k8s-ci/kustomization.yaml <<'EOF'
+          resources: [../infra/week5]
+          images:
+            - name: ghcr.io/torehan06/urdnot-api
+              newName: urdnot-api
+              newTag: ci
+              digest: ""
+          EOF
+
+      - name: Deploy
+        run: kubectl apply -k .k8s-ci
+
+      - name: Wait for the rollouts
+        run: |
+          kubectl -n urdnot rollout status statefulset/postgres --timeout=180s
+          kubectl -n urdnot rollout status statefulset/redis --timeout=120s
+          kubectl -n urdnot rollout status deployment/urdnot-api --timeout=180s
+
+      # port-forward to the Service picks one Pod and tunnels to it. Good
+      # enough for a functional check; it doesn't test load balancing.
+      - name: Run the smoke test through a port-forward
+        run: |
+          kubectl -n urdnot port-forward svc/urdnot-api 8000:80 >/tmp/port-forward.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          set -a; . infra/week5/secrets.env; set +a
+          BASE_URL=http://127.0.0.1:8000 scripts/smoke-test.sh
+
+      - name: Show cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n urdnot get all,pvc,events --sort-by=.metadata.creationTimestamp || true
+          kubectl -n urdnot describe pods || true
+          kubectl -n urdnot logs --all-containers --prefix -l 'app.kubernetes.io/name in (urdnot-api,postgres,redis)' --tail=100 || true
+          cat /tmp/port-forward.log || true
+
   publish:
-    needs: [test, smoke]
+    needs: [test, smoke, k8s]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30

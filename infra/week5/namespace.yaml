@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: urdnot
+  labels:
+    # Pod Security Admission. The stock Postgres and Redis entrypoints start
+    # as root and then drop to a service user, which the "restricted" profile
+    # rejects. So "baseline" is enforced, and "restricted" violations are
+    # only reported as warnings on apply, where they stay visible.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
