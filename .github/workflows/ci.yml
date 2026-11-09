@@ -147,7 +147,6 @@ jobs:
             - name: ghcr.io/torehan06/urdnot-api
               newName: urdnot-api
               newTag: ci
-              digest: ""
           EOF
 
       - name: Deploy

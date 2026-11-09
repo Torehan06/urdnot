@@ -70,7 +70,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). Kubernetes, autoscaling, and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). Autoscaling and monitoring infrastructure remain later curriculum exercises.
 
 ## Run in a container
 
@@ -92,6 +92,18 @@ docker compose down     # keeps data; `down -v` also deletes the pgdata and redi
 
 `.env` is git-ignored and only feeds Compose interpolation. `POSTGRES_PASSWORD` (required, URL-safe, because it is placed inside `DATABASE_URL`) and `CLAN_SECRET` (required) must be set. `CLAN_NAME`, `LOG_LEVEL`, and `REVISION` (image label) are optional. Compose sets the service's `DATABASE_URL` and `REDIS_URL` itself. Only the API is published, on `127.0.0.1:8000`. Postgres and Redis are reachable only on the Compose network. See [docs/week-03.md](docs/week-03.md) for the design.
 
+## Run on Kubernetes
+
+```sh
+kubectl config current-context    # make sure this is the cluster you mean
+{ echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"; echo "CLAN_SECRET=$(openssl rand -hex 24)"; } > infra/week5/secrets.env
+kubectl apply -k infra/week5
+kubectl -n urdnot rollout status deployment/urdnot-api
+kubectl -n urdnot port-forward svc/urdnot-api 8000:80
+```
+
+`infra/week5/secrets.env` is git-ignored and becomes the `urdnot-secrets` Secret. The API runs as 2 replicas of the published `ghcr.io/torehan06/urdnot-api` image, pinned by tag and digest. Postgres and Redis are single-replica StatefulSets with PersistentVolumeClaims. Liveness probes use `/healthz` and readiness probes use `/readyz`. See [infra/week5/README.md](infra/week5/README.md) for the runbook and [docs/week-05.md](docs/week-05.md) for the design.
+
 ## Tests
 
 `app/requirements.txt` holds runtime dependencies only; test tooling is in `app/requirements-dev.txt`. From the repository root with the virtual environment active:
@@ -105,11 +117,11 @@ Tests clear backend environment variables and need no running Postgres or Redis.
 
 ## CI/CD
 
-GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. On `main`, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`. Run the same smoke test locally against a running stack:
+GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. `k8s` deploys [`infra/week5`](infra/week5) to a kind cluster with the freshly built image and runs the same script through a port-forward. On `main`, after all three pass, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`. Run the same smoke test locally against a running stack:
 
 ```sh
 set -a; . ./.env; set +a
 scripts/smoke-test.sh          # BASE_URL defaults to http://127.0.0.1:8000
 ```
 
-See [docs/week-04.md](docs/week-04.md) for the design.
+See [docs/week-04.md](docs/week-04.md) and [docs/week-05.md](docs/week-05.md) for the design.
