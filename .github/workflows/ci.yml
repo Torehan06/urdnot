@@ -1,11 +1,11 @@
-# Weeks 4-6: CI/CD for urdnot-api.
+# Weeks 4-7: CI/CD for urdnot-api.
 #
 #   test     unit tests on the runner's Python 3.12 (fast feedback, no Docker)
 #   smoke    build the image and run the full Compose stack, then hit it with
 #            scripts/smoke-test.sh (real Postgres and Redis)
-#   k8s      build the image, deploy infra/week6 (Week 5 + the Week 6
-#            overlay) to a throwaway kind cluster, and run the same smoke
-#            test through a port-forward
+#   k8s      lint the Helm chart (infra/week7), build the image, install the
+#            chart on a throwaway kind cluster with the staging values, and
+#            run the same smoke test through a port-forward
 #   publish  only on main, after all three pass: build linux/amd64 +
 #            linux/arm64 and push to ghcr.io/<owner>/urdnot-api
 #
@@ -115,7 +115,7 @@ jobs:
           cluster_name: ${{ env.KIND_CLUSTER }}
           wait: 120s
 
-      # Test this commit's code, not the image pinned in kustomization.yaml.
+      # Test this commit's code, not the image pinned in the chart's values.yaml.
       # kind nodes can't see the runner's Docker images, so load it into the
       # node. The tag is not "latest", so imagePullPolicy is IfNotPresent and
       # the node uses the loaded copy instead of trying a registry.
@@ -125,7 +125,9 @@ jobs:
           kind load docker-image urdnot-api:ci --name "$KIND_CLUSTER"
 
       # Same idea as the smoke job's .env: throwaway values, masked in logs.
-      - name: Generate a throwaway secrets.env
+      # secrets.env feeds the Kustomize render check and the smoke test;
+      # values-ci.yaml gives Helm the same secrets plus the image built above.
+      - name: Generate throwaway secrets
         run: |
           pg_password="$(openssl rand -hex 24)"
           clan_secret="$(openssl rand -hex 24)"
@@ -135,31 +137,45 @@ jobs:
             echo "POSTGRES_PASSWORD=$pg_password"
             echo "CLAN_SECRET=$clan_secret"
           } > infra/week5/secrets.env
-
-      # A throwaway overlay on top of infra/week6 that only swaps the image.
-      # Everything else (probes, Secrets, volumes) is exactly what gets
-      # deployed for real. kind has no Ingress controller, so the Ingress is
-      # created but routes nothing; the smoke test uses a port-forward.
-      - name: Create a CI overlay
-        run: |
-          mkdir .k8s-ci
-          cat > .k8s-ci/kustomization.yaml <<'EOF'
-          resources: [../infra/week6]
-          images:
-            - name: ghcr.io/torehan06/urdnot-api
-              newName: urdnot-api
-              newTag: ci
+          cat > values-ci.yaml <<EOF
+          secrets:
+            postgresPassword: "$pg_password"
+            clanSecret: "$clan_secret"
+          api:
+            image:
+              repository: urdnot-api
+              tag: ci
+              digest: ""
           EOF
 
-      - name: Deploy
-        run: kubectl apply -k .k8s-ci
+      # Static checks before anything is deployed. `helm template` renders
+      # each environment the way `helm install` would, so a template error in
+      # either values file fails here. The Week 5 and 6 Kustomize manifests
+      # are no longer deployed by CI; rendering them keeps them valid.
+      - name: Lint and render the chart
+        run: |
+          helm version --short
+          for env in dev staging; do
+            helm lint infra/week7/urdnot --strict -f "infra/week7/values-$env.yaml" -f values-ci.yaml
+            helm template urdnot infra/week7/urdnot -f "infra/week7/values-$env.yaml" -f values-ci.yaml >/dev/null
+          done
+          kubectl kustomize infra/week6 >/dev/null
+
+      # The same command as a real install, with the staging values. kind has
+      # no Ingress controller, so the Ingress is created but routes nothing;
+      # the smoke test uses a port-forward.
+      - name: Install the chart
+        run: |
+          helm upgrade --install urdnot infra/week7/urdnot \
+            --namespace urdnot --create-namespace \
+            -f infra/week7/values-staging.yaml -f values-ci.yaml
 
       - name: Wait for the rollouts
         run: |
           kubectl -n urdnot rollout status statefulset/postgres --timeout=180s
           kubectl -n urdnot rollout status statefulset/redis --timeout=120s
           kubectl -n urdnot rollout status deployment/urdnot-api --timeout=180s
-          # The overlay's own resources must land in the namespace too.
+          helm -n urdnot status urdnot
           kubectl -n urdnot get ingress urdnot-api
 
       # port-forward to the Service picks one Pod and tunnels to it. Good
@@ -180,6 +196,7 @@ jobs:
           kubectl -n urdnot get all,pvc,events --sort-by=.metadata.creationTimestamp || true
           kubectl -n urdnot describe pods || true
           kubectl -n urdnot logs --all-containers --prefix -l 'app.kubernetes.io/name in (urdnot-api,postgres,redis)' --tail=100 || true
+          helm -n urdnot history urdnot || true
           cat /tmp/port-forward.log || true
 
   publish:

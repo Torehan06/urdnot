@@ -1,0 +1,12 @@
+# Non-secret settings for the API. The name is fixed: Helm has no hash suffix
+# like Kustomize's, so templates/api.yaml carries a checksum of this file to
+# roll the Pods when a value changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: urdnot-config
+  labels:
+    {{- include "urdnot.labels" . | nindent 4 }}
+data:
+  CLAN_NAME: {{ .Values.api.config.clanName | quote }}
+  LOG_LEVEL: {{ .Values.api.config.logLevel | quote }}

@@ -1,0 +1,15 @@
+# Week 7: staging environment. Only the differences from urdnot/values.yaml.
+# Staging should look like production, so it keeps the chart's defaults
+# (2 replicas, info logging) and changes only what names the environment.
+#
+#   helm upgrade --install urdnot infra/week7/urdnot -n urdnot-staging --create-namespace \
+#     -f infra/week7/values-staging.yaml -f infra/week7/values-local.yaml
+
+api:
+  replicaCount: 2
+  config:
+    clanName: Urdnot (staging)
+    logLevel: info
+
+ingress:
+  host: staging.urdnot.localhost

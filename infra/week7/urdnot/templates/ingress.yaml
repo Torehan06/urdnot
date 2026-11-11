@@ -1,0 +1,24 @@
+{{- if .Values.ingress.enabled }}
+# Routes requests whose Host header is ingress.host to the urdnot-api Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+    {{- include "urdnot.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ required "ingress.host is required when ingress.enabled is true" .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: urdnot-api
+                port:
+                  name: http
+{{- end }}

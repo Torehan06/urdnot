@@ -1,0 +1,15 @@
+# Week 7: dev environment. Only the differences from urdnot/values.yaml.
+#
+#   helm upgrade --install urdnot infra/week7/urdnot -n urdnot-dev --create-namespace \
+#     -f infra/week7/values-dev.yaml -f infra/week7/values-local.yaml
+
+api:
+  # One replica: cheap, and enough to develop against. The chart leaves out
+  # the PodDisruptionBudget for a single replica (it would block node drains).
+  replicaCount: 1
+  config:
+    clanName: Urdnot (dev)
+    logLevel: debug
+
+ingress:
+  host: dev.urdnot.localhost

@@ -234,3 +234,6 @@ infra/week5/secrets.env
 
 # Personal Kustomize overlay for testing a locally built image (infra/week6/README.md)
 .k8s-local/
+
+# Week 7 Helm secrets and local image override (see infra/week7/values-local.yaml.example)
+infra/week7/values-local.yaml

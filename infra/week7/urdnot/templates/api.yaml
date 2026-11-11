@@ -1,0 +1,153 @@
+# urdnot-api: Service, Deployment and PodDisruptionBudget. The same objects as
+# infra/week5/api.yaml with the Week 6 patch applied; the design reasons are in
+# docs/week-05.md and docs/week-06.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+    {{- include "urdnot.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: urdnot-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+    {{- include "urdnot.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: urdnot-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: urdnot-api
+        app.kubernetes.io/component: api
+      annotations:
+        # Env vars are fixed when a container starts. This hash changes when
+        # the ConfigMap's contents change, which changes the Pod template, so
+        # the Deployment rolls out new Pods with the new values.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: urdnot-api
+      containers:
+        - name: api
+          image: {{ include "urdnot.apiImage" . }}
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: urdnot-config
+          env:
+            - name: CLAN_SECRET_FILE
+              value: /etc/urdnot/secrets/clan-secret
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "urdnot.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://urdnot:$(POSTGRES_PASSWORD)@postgres:5432/urdnot
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 1
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: clan-secret
+              mountPath: /etc/urdnot/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: clan-secret
+          secret:
+            secretName: {{ include "urdnot.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: CLAN_SECRET
+                path: clan-secret
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- if gt (int .Values.api.replicaCount) 1 }}
+---
+# Only with 2+ replicas: with one replica, minAvailable 1 would forbid every
+# voluntary eviction and block a node drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+    {{- include "urdnot.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: urdnot-api
+{{- end }}

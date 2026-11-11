@@ -1,0 +1,6 @@
+# Files left out of `helm package`.
+.DS_Store
+.git/
+*.tgz
+*.orig
+*.bak
