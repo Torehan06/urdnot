@@ -229,6 +229,7 @@ def create_app():
         clan = escape(os.getenv("CLAN_NAME", "Urdnot"))
         hostname = escape(socket.gethostname())
         version = escape(os.getenv("APP_VERSION", "0.1.0"))
+        revision = escape(os.getenv("APP_REVISION", "unknown"))
         uptime = time.monotonic() - started
         return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>urdnot-api</title>
@@ -236,7 +237,7 @@ def create_app():
 <body style="font-family:system-ui;max-width:48rem;margin:3rem auto;padding:1rem">
 <h1>{clan}</h1><p>Serving from hostname</p>
 <strong style="font-size:clamp(2rem,6vw,4rem);overflow-wrap:anywhere">{hostname}</strong>
-<p>Service: urdnot-api · Version: {version}</p>
+<p>Service: urdnot-api · Version: {version} · Revision: {revision}</p>
 <p>Uptime: {uptime:.1f} seconds</p>
 <p>Storage: {storage_mode} · Counter: {counter_mode}</p>
 </body></html>"""

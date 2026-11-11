@@ -7,12 +7,16 @@
 api:
   replicaCount: 2
 
-  # The image CI published from main. tag says which commit it is; digest
+  # An image CI published from main. tag says which commit it is; digest
   # makes the reference immutable. Leave digest empty for a locally built image.
+  # This is only the default for a manual install: the pipeline passes the
+  # image it just built (scripts/deploy.sh, Week 8), so nobody has to edit
+  # this for a deployment. CI also uses it as the "previous release" that its
+  # upgrade test starts from.
   image:
     repository: ghcr.io/torehan06/urdnot-api
-    tag: sha-0b1eec1
-    digest: sha256:cea8c200ef107551ea3b089b050247068e2f3e357e596274fb3f0d9e73c51eef
+    tag: sha-66e9028
+    digest: sha256:62f28aac532a0c3df3e9bae2ab4193f090f133ad9ed4e19c44f65eb31b12202a
 
   # Non-secret settings, delivered as env vars from a ConfigMap. Changing one
   # rolls the Pods (see the checksum annotation in templates/api.yaml).
