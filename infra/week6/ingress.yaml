@@ -1,0 +1,31 @@
+# Host-based routing: requests for urdnot.localhost go to the urdnot-api
+# Service; any other Host gets the controller's 404. The Ingress object is
+# only a routing rule. An Ingress controller (Traefik in k3s) watches it and
+# configures itself. Without a controller, this object does nothing.
+#
+# *.localhost always resolves to the loopback address (RFC 6761), so no
+# /etc/hosts entry is needed on the machine running the cluster.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+spec:
+  # Named explicitly instead of relying on the cluster's default class, so
+  # the route never lands on another controller by accident. On a cluster
+  # with a different controller, change this one line.
+  ingressClassName: traefik
+  rules:
+    - host: urdnot.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: urdnot-api
+                port:
+                  name: http

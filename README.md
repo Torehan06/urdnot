@@ -13,6 +13,7 @@ It is the application layer for a 12-week DevOps curriculum that takes a service
 | `LOG_LEVEL` | `info` | Diagnostic log level; request access records always emit at info. |
 | `CLAN_NAME` | `Urdnot` | Clan name displayed on the home page; read at request time. |
 | `CLAN_SECRET` | `shiagur` | Required value of `X-Clan-Secret` when creating a record; read at request time. The default is for local development only; override it in any deployment. |
+| `CLAN_SECRET_FILE` | Unset | Path to a file holding the clan secret. When set, it takes precedence over `CLAN_SECRET` and is read on every request, so a rotated Kubernetes Secret volume takes effect without a restart. Surrounding whitespace is ignored. A missing, unreadable or empty file makes record creation return 503. |
 
 ## Run locally
 
@@ -29,7 +30,7 @@ Open [the home page](http://127.0.0.1:8000/). Its large hostname makes it easy t
 
 **Set `HOST=0.0.0.0` when running inside a container.** The default remains `127.0.0.1` for the initial Linux and reverse-proxy exercises. Use `python -m app` as the process entry point to apply the environment settings, JSON logging, and graceful shutdown behavior.
 
-All configuration comes from environment variables. `CLAN_NAME` and `CLAN_SECRET` are looked up for each request, so no image rebuild is needed. Changing deployment or shell environment variables does not modify an already running process's environment; restart or roll out the process with the new values.
+All configuration comes from environment variables. `CLAN_NAME` and `CLAN_SECRET` are looked up for each request, so no image rebuild is needed. Changing deployment or shell environment variables does not modify an already running process's environment; restart or roll out the process with the new values. The one exception is `CLAN_SECRET_FILE`: the file is re-read on every request, so changing its contents takes effect immediately.
 
 ## Endpoints
 
@@ -70,7 +71,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). Autoscaling and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). Autoscaling and monitoring infrastructure remain later curriculum exercises.
 
 ## Run in a container
 

@@ -1,0 +1,45 @@
+# Week 6: configuration, storage and traffic routing, as an overlay on top
+# of Week 5. Nothing in infra/week5 is copied; this file only lists what
+# changes.
+#
+#   kubectl apply -k infra/week6        # needs infra/week5/secrets.env
+#   curl http://urdnot.localhost/healthz
+#
+# See infra/week6/README.md for the runbook and docs/week-06.md for the
+# design notes.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The base's namespace and labels apply only to the base's own resources.
+# Without repeating them here, ingress.yaml would land in "default", where no
+# urdnot-api Service exists.
+namespace: urdnot
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: urdnot
+    includeSelectors: false
+
+resources:
+  - ../week5
+  - ingress.yaml
+
+# Week 5 gave the Secret a hash suffix (urdnot-secrets-<hash>), so any change
+# rolled every Pod. That is right for values read once at startup, but a
+# mounted file can only be updated in place if the name stays the same: a
+# new name would be a new object, and the Pod would still point at the old
+# one. So the Secret keeps a fixed name here, and the API reads CLAN_SECRET
+# from a file (see api-patch.yaml).
+#
+# The ConfigMap keeps its hash suffix on purpose. CLAN_NAME and LOG_LEVEL
+# are environment variables, which never change inside a running process,
+# so a rollout is the only way to deliver a new value.
+secretGenerator:
+  - name: urdnot-secrets
+    behavior: merge
+    options:
+      disableNameSuffixHash: true
+
+patches:
+  - path: api-patch.yaml
