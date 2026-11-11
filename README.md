@@ -10,6 +10,7 @@ It is the application layer for a 12-week DevOps curriculum that takes a service
 | `DATABASE_URL` | Unset | Postgres connection URL; unset or empty uses an in-memory dict. |
 | `REDIS_URL` | Unset | Redis connection URL; unset or empty uses an in-process counter. |
 | `APP_VERSION` | `0.1.0` | Version displayed on the home page. |
+| `APP_REVISION` | `unknown` | Git commit the image was built from, displayed on the home page. The Dockerfile sets it from the `REVISION` build argument. |
 | `LOG_LEVEL` | `info` | Diagnostic log level; request access records always emit at info. |
 | `CLAN_NAME` | `Urdnot` | Clan name displayed on the home page; read at request time. |
 | `CLAN_SECRET` | `shiagur` | Required value of `X-Clan-Secret` when creating a record; read at request time. The default is for local development only; override it in any deployment. |
@@ -38,7 +39,7 @@ The light naming theme comes from the krogan clans in Mass Effect. The Hollows h
 
 | Method and path | Behavior |
 | --- | --- |
-| `GET /` | Tiny HTML page with clan name, prominent hostname, version, uptime, storage mode, and counter mode. |
+| `GET /` | Tiny HTML page with clan name, prominent hostname, version, revision, uptime, storage mode, and counter mode. |
 | `GET /healthz` | Always 200 when served; checks no dependencies. |
 | `GET /readyz` | 200 when ready. Checks only configured backends; failures return 503 with `failing_dependencies`, e.g. `["postgres", "redis"]`. |
 | `GET /metrics` | Prometheus exposition, including `http_requests_total{path,status}` and `http_request_duration_seconds{path}` histogram. |
@@ -71,7 +72,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). [`infra/week7`](infra/week7/README.md) packages all of it as a Helm chart with a values file per environment (Week 7). Autoscaling and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). [`infra/week7`](infra/week7/README.md) packages all of it as a Helm chart with a values file per environment (Week 7). [`infra/week8`](infra/week8/README.md) and [`scripts/deploy.sh`](scripts/deploy.sh) deploy a published image with `helm upgrade`, by hand or from the pipeline (Week 8). Autoscaling and monitoring infrastructure remain later curriculum exercises.
 
 ## Run in a container
 
@@ -131,7 +132,7 @@ Tests clear backend environment variables and need no running Postgres or Redis.
 
 ## CI/CD
 
-GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. `k8s` lints the Helm chart in [`infra/week7`](infra/week7), installs it on a kind cluster with the freshly built image, and runs the same script through a port-forward. On `main`, after all three pass, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`. Run the same smoke test locally against a running stack:
+GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. `k8s` lints the Helm chart in [`infra/week7`](infra/week7) and rehearses a deployment on a kind cluster: it installs the previous release, upgrades to the freshly built image with [`scripts/deploy.sh`](scripts/deploy.sh) while [`scripts/rollout-probe.sh`](scripts/rollout-probe.sh) counts lost requests (there must be none), runs the smoke test through a port-forward, and checks that a broken image is rolled back. On `main`, after all three pass, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`, and `deploy` then upgrades a test cluster to exactly that image, again with zero lost requests. See [docs/week-08.md](docs/week-08.md). Run the same smoke test locally against a running stack:
 
 ```sh
 set -a; . ./.env; set +a

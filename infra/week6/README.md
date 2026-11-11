@@ -13,7 +13,7 @@ Secrets still come from `infra/week5/secrets.env` (git-ignored). Kustomize only 
 ## Requirements
 
 - **An Ingress controller.** k3s (Rancher Desktop) ships Traefik as the default IngressClass. On kind or minikube, install one first and change `ingressClassName` in `ingress.yaml`.
-- **An image with `CLAN_SECRET_FILE` support.** The pinned image (`sha-0b1eec1`, from Week 5) predates it. It would ignore the file and fall back to the development default `shiagur`. Bump the pin in `infra/week5/kustomization.yaml` to the first image published after Week 6 is merged. Until then, build locally (below).
+- **An image with `CLAN_SECRET_FILE` support.** The pin in `infra/week5/kustomization.yaml` (`sha-66e9028`, bumped in Week 8) has it. The Week 5 pin (`sha-0b1eec1`) did not: it would ignore the file and fall back to the development default `shiagur`.
 
 ## Deploy
 
