@@ -1,0 +1,16 @@
+# Copy to values-local.yaml (git-ignored) in this directory and replace every
+# value. Pass it last, so it wins: -f values-dev.yaml -f values-local.yaml
+# Generate values with: openssl rand -hex 24
+# Hex only: postgresPassword is placed inside DATABASE_URL.
+
+secrets:
+  postgresPassword: change-me
+  clanSecret: change-me
+
+# Uncomment to run an image built on this machine instead of the published one
+# (see README.md, "Use a locally built image").
+# api:
+#   image:
+#     repository: urdnot-api
+#     tag: week7-local
+#     digest: ""

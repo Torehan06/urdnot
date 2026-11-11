@@ -1,0 +1,69 @@
+# Default values for the urdnot chart. An environment file (../values-dev.yaml,
+# ../values-staging.yaml) overrides only what differs; later -f files win.
+#
+# Resource names are fixed (urdnot-api, postgres, redis), not prefixed with the
+# release name, so install one release per namespace.
+
+api:
+  replicaCount: 2
+
+  # The image CI published from main. tag says which commit it is; digest
+  # makes the reference immutable. Leave digest empty for a locally built image.
+  image:
+    repository: ghcr.io/torehan06/urdnot-api
+    tag: sha-0b1eec1
+    digest: sha256:cea8c200ef107551ea3b089b050247068e2f3e357e596274fb3f0d9e73c51eef
+
+  # Non-secret settings, delivered as env vars from a ConfigMap. Changing one
+  # rolls the Pods (see the checksum annotation in templates/api.yaml).
+  config:
+    clanName: Urdnot
+    logLevel: info
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+
+ingress:
+  enabled: true
+  # Must name an IngressClass that exists in the cluster (k3s ships traefik).
+  className: traefik
+  host: urdnot.localhost
+
+postgres:
+  image: postgres:18.6-trixie@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+  # Size of the PersistentVolumeClaim. It can't be changed with `helm upgrade`:
+  # a StatefulSet's volumeClaimTemplates are immutable.
+  storage: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+redis:
+  image: redis:8.10.2-trixie@sha256:97ec88159e6d7cfb5ddef9015386087d58a912de80112f06ebdfa78fa5989901
+  storage: 512Mi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# Never put real values here: this file is committed. Supply them from a
+# git-ignored file (-f infra/week7/values-local.yaml). The install fails if
+# they are empty.
+secrets:
+  # Name of a Secret that already exists in the namespace, with the keys
+  # POSTGRES_PASSWORD and CLAN_SECRET. When set, the chart creates no Secret
+  # and the two values below are ignored.
+  existingSecret: ""
+  # Hex only: the password is placed inside DATABASE_URL.
+  postgresPassword: ""
+  clanSecret: ""

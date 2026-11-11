@@ -1,0 +1,12 @@
+# Week 7: urdnot-api, Postgres and Redis as one Helm chart.
+# See infra/week7/README.md for the runbook and docs/week-07.md for the design.
+apiVersion: v2
+name: urdnot
+description: urdnot-api with its Postgres and Redis, for the DevOps curriculum
+type: application
+
+# version is the chart's own version: bump it when templates or default values
+# change. appVersion is the version of the application the chart deploys and
+# is informational; the image that actually runs is set in values (api.image).
+version: 0.1.0
+appVersion: "0.1.0"

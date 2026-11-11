@@ -1,0 +1,16 @@
+urdnot {{ .Chart.Version }} installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}" (revision {{ .Release.Revision }}).
+
+  API image:  {{ include "urdnot.apiImage" . }}
+  Replicas:   {{ .Values.api.replicaCount }}
+  Log level:  {{ .Values.api.config.logLevel }}
+
+Watch it come up:
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/urdnot-api
+  kubectl -n {{ .Release.Namespace }} get pods,svc,ingress,pvc
+{{ if .Values.ingress.enabled }}
+Reach it through the Ingress (class "{{ .Values.ingress.className }}"):
+  curl http://{{ .Values.ingress.host }}/healthz
+{{- else }}
+No Ingress. Reach it through a port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/urdnot-api 8000:80
+{{- end }}
