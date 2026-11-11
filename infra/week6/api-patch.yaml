@@ -1,0 +1,44 @@
+# Strategic merge patch for the Week 5 Deployment. List items under env,
+# volumeMounts and volumes are matched by name, so this only touches the
+# entries named here.
+#
+# CLAN_SECRET moves from an environment variable to a file. The kubelet
+# updates files from a Secret volume when the Secret changes, and the app
+# reads the file on every request, so a rotated secret takes effect in about
+# a minute without restarting any Pod.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urdnot-api
+spec:
+  template:
+    spec:
+      securityContext:
+        # Secret volume files are owned by root. fsGroup makes them
+        # group-owned by 10001, the app's group, so mode 0440 lets the app
+        # read them while other users can't.
+        fsGroup: 10001
+      containers:
+        - name: api
+          env:
+            - name: CLAN_SECRET
+              $patch: delete
+            - name: CLAN_SECRET_FILE
+              value: /etc/urdnot/secrets/clan-secret
+          volumeMounts:
+            # A whole-directory mount. A subPath mount would never be
+            # updated after the Pod starts.
+            - name: clan-secret
+              mountPath: /etc/urdnot/secrets
+              readOnly: true
+      volumes:
+        - name: clan-secret
+          secret:
+            secretName: urdnot-secrets
+            # Only this key becomes a file; POSTGRES_PASSWORD stays out of
+            # the API's filesystem.
+            items:
+              - key: CLAN_SECRET
+                path: clan-secret
+            defaultMode: 0440

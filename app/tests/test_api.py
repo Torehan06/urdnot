@@ -12,7 +12,8 @@ from app.main import create_app
 
 @pytest.fixture(autouse=True)
 def environment(monkeypatch):
-    for key in ("DATABASE_URL", "REDIS_URL", "CLAN_NAME", "CLAN_SECRET", "APP_VERSION"):
+    for key in ("DATABASE_URL", "REDIS_URL", "CLAN_NAME", "CLAN_SECRET",
+                "CLAN_SECRET_FILE", "APP_VERSION"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -86,6 +87,36 @@ def test_request_time_config(client, monkeypatch):
                        headers={"X-Clan-Secret": "shiagur"}).status_code == 403
     assert client.post("/api/hollows", json=payload,
                        headers={"X-Clan-Secret": "new-secret"}).status_code == 201
+
+
+def test_clan_secret_file_is_reread(client, monkeypatch, tmp_path):
+    secret_file = tmp_path / "clan-secret"
+    secret_file.write_text("first\n")
+    monkeypatch.setenv("CLAN_SECRET", "from-env")
+    monkeypatch.setenv("CLAN_SECRET_FILE", str(secret_file))
+    payload = {"name": "A", "text": "B"}
+
+    def post(secret):
+        return client.post("/api/hollows", json=payload,
+                           headers={"X-Clan-Secret": secret}).status_code
+
+    assert post("from-env") == 403  # the file wins over CLAN_SECRET
+    assert post("first") == 201     # trailing newline ignored
+    secret_file.write_text("second")
+    assert post("first") == 403     # rotated without restarting the app
+    assert post("second") == 201
+
+
+@pytest.mark.parametrize("content", [None, "", "  \n"])
+def test_clan_secret_file_fails_closed(client, monkeypatch, tmp_path, content):
+    secret_file = tmp_path / "clan-secret"
+    if content is not None:
+        secret_file.write_text(content)
+    monkeypatch.setenv("CLAN_SECRET_FILE", str(secret_file))
+    response = client.post("/api/hollows", json={"name": "A", "text": "B"},
+                           headers={"X-Clan-Secret": ""})
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"dependency": "clan-secret"}}
 
 
 def test_metrics_and_access_log(client, caplog):

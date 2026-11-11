@@ -95,6 +95,25 @@ class HollowInput(BaseModel):
     text: str
 
 
+def clan_secret():
+    """Return the expected X-Clan-Secret, read fresh on every call.
+
+    CLAN_SECRET_FILE, when set, wins over CLAN_SECRET. A file can change while
+    the process runs (a Kubernetes Secret mounted as a volume does), an
+    environment variable can't. A missing, unreadable or empty file returns
+    None so the caller fails closed instead of accepting an empty secret.
+    """
+    path = os.getenv("CLAN_SECRET_FILE")
+    if not path:
+        return os.getenv("CLAN_SECRET", "shiagur")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = handle.read().strip()
+    except OSError:
+        return None
+    return value or None
+
+
 def create_app():
     database_url = os.getenv("DATABASE_URL") or None
     redis_url = os.getenv("REDIS_URL") or None
@@ -239,7 +258,9 @@ def create_app():
 
     @application.post("/api/hollows", status_code=201)
     def create_hollow(item: HollowInput, x_clan_secret: str | None = Header(None)):
-        expected = os.getenv("CLAN_SECRET", "shiagur")
+        expected = clan_secret()
+        if expected is None:
+            raise HTTPException(503, detail={"dependency": "clan-secret"})
         if x_clan_secret is None or not secrets.compare_digest(
             x_clan_secret.encode(), expected.encode()
         ):

@@ -1,10 +1,11 @@
-# Weeks 4-5: CI/CD for urdnot-api.
+# Weeks 4-6: CI/CD for urdnot-api.
 #
 #   test     unit tests on the runner's Python 3.12 (fast feedback, no Docker)
 #   smoke    build the image and run the full Compose stack, then hit it with
 #            scripts/smoke-test.sh (real Postgres and Redis)
-#   k8s      build the image, deploy infra/week5 to a throwaway kind cluster,
-#            and run the same smoke test through a port-forward (Week 5)
+#   k8s      build the image, deploy infra/week6 (Week 5 + the Week 6
+#            overlay) to a throwaway kind cluster, and run the same smoke
+#            test through a port-forward
 #   publish  only on main, after all three pass: build linux/amd64 +
 #            linux/arm64 and push to ghcr.io/<owner>/urdnot-api
 #
@@ -135,14 +136,15 @@ jobs:
             echo "CLAN_SECRET=$clan_secret"
           } > infra/week5/secrets.env
 
-      # A throwaway overlay on top of infra/week5 that only swaps the image.
+      # A throwaway overlay on top of infra/week6 that only swaps the image.
       # Everything else (probes, Secrets, volumes) is exactly what gets
-      # deployed for real.
+      # deployed for real. kind has no Ingress controller, so the Ingress is
+      # created but routes nothing; the smoke test uses a port-forward.
       - name: Create a CI overlay
         run: |
           mkdir .k8s-ci
           cat > .k8s-ci/kustomization.yaml <<'EOF'
-          resources: [../infra/week5]
+          resources: [../infra/week6]
           images:
             - name: ghcr.io/torehan06/urdnot-api
               newName: urdnot-api
@@ -157,6 +159,8 @@ jobs:
           kubectl -n urdnot rollout status statefulset/postgres --timeout=180s
           kubectl -n urdnot rollout status statefulset/redis --timeout=120s
           kubectl -n urdnot rollout status deployment/urdnot-api --timeout=180s
+          # The overlay's own resources must land in the namespace too.
+          kubectl -n urdnot get ingress urdnot-api
 
       # port-forward to the Service picks one Pod and tunnels to it. Good
       # enough for a functional check; it doesn't test load balancing.

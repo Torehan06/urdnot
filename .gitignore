@@ -231,3 +231,6 @@ CLAUDE.local.md
 
 # Week 5 Kubernetes secrets (see infra/week5/secrets.env.example)
 infra/week5/secrets.env
+
+# Personal Kustomize overlay for testing a locally built image (infra/week6/README.md)
+.k8s-local/
