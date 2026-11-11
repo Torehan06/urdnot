@@ -71,7 +71,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). Autoscaling and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). [`infra/week7`](infra/week7/README.md) packages all of it as a Helm chart with a values file per environment (Week 7). Autoscaling and monitoring infrastructure remain later curriculum exercises.
 
 ## Run in a container
 
@@ -105,6 +105,19 @@ kubectl -n urdnot port-forward svc/urdnot-api 8000:80
 
 `infra/week5/secrets.env` is git-ignored and becomes the `urdnot-secrets` Secret. The API runs as 2 replicas of the published `ghcr.io/torehan06/urdnot-api` image, pinned by tag and digest. Postgres and Redis are single-replica StatefulSets with PersistentVolumeClaims. Liveness probes use `/healthz` and readiness probes use `/readyz`. See [infra/week5/README.md](infra/week5/README.md) for the runbook and [docs/week-05.md](docs/week-05.md) for the design.
 
+`kubectl apply -k infra/week6` deploys the same stack plus an Ingress for `http://urdnot.localhost` and mounts the clan secret as a file, so it can be rotated without a restart. It needs an Ingress controller and an image that supports `CLAN_SECRET_FILE`. See [infra/week6/README.md](infra/week6/README.md) and [docs/week-06.md](docs/week-06.md).
+
+## Run with Helm
+
+```sh
+cp infra/week7/values-local.yaml.example infra/week7/values-local.yaml    # replace both secrets
+helm upgrade --install urdnot infra/week7/urdnot -n urdnot-dev --create-namespace \
+  -f infra/week7/values-dev.yaml -f infra/week7/values-local.yaml --wait
+curl -fsS http://dev.urdnot.localhost/healthz
+```
+
+The chart in [`infra/week7/urdnot`](infra/week7/urdnot) deploys the same objects as `infra/week6`. `values-dev.yaml` (1 replica, debug logging) and `values-staging.yaml` (2 replicas) each install a separate environment into its own namespace. `values-local.yaml` is git-ignored and holds the secrets. See [infra/week7/README.md](infra/week7/README.md) for the runbook and [docs/week-07.md](docs/week-07.md) for the design.
+
 ## Tests
 
 `app/requirements.txt` holds runtime dependencies only; test tooling is in `app/requirements-dev.txt`. From the repository root with the virtual environment active:
@@ -118,11 +131,11 @@ Tests clear backend environment variables and need no running Postgres or Redis.
 
 ## CI/CD
 
-GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. `k8s` deploys [`infra/week5`](infra/week5) to a kind cluster with the freshly built image and runs the same script through a port-forward. On `main`, after all three pass, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`. Run the same smoke test locally against a running stack:
+GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push to `main` and on every pull request. `test` runs the unit tests. `smoke` builds the image, starts the Compose stack with a generated `.env`, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh) against it. `k8s` lints the Helm chart in [`infra/week7`](infra/week7), installs it on a kind cluster with the freshly built image, and runs the same script through a port-forward. On `main`, after all three pass, `publish` pushes `ghcr.io/torehan06/urdnot-api:sha-<commit>` and `:main` for `linux/amd64` and `linux/arm64`. Run the same smoke test locally against a running stack:
 
 ```sh
 set -a; . ./.env; set +a
 scripts/smoke-test.sh          # BASE_URL defaults to http://127.0.0.1:8000
 ```
 
-See [docs/week-04.md](docs/week-04.md) and [docs/week-05.md](docs/week-05.md) for the design.
+See [docs/week-04.md](docs/week-04.md), [docs/week-05.md](docs/week-05.md) and [docs/week-07.md](docs/week-07.md) for the design.
