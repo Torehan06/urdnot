@@ -43,11 +43,11 @@ secretGenerator:
     envs:
       - secrets.env
 
-# The API image that CI published from main (commit 0b1eec1). The sha-<7>
+# The API image that CI published from main (commit 66e9028). The sha-<7>
 # tag says which commit it is; the digest makes the reference immutable, so
 # a re-pushed tag can't change what runs. The k8s job in ci.yml swaps this
 # for the image it just built from the commit under test.
 images:
   - name: urdnot-api
     newName: ghcr.io/torehan06/urdnot-api
-    newTag: sha-0b1eec1@sha256:cea8c200ef107551ea3b089b050247068e2f3e357e596274fb3f0d9e73c51eef
+    newTag: sha-66e9028@sha256:62f28aac532a0c3df3e9bae2ab4193f090f133ad9ed4e19c44f65eb31b12202a

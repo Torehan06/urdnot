@@ -13,7 +13,7 @@ from app.main import create_app
 @pytest.fixture(autouse=True)
 def environment(monkeypatch):
     for key in ("DATABASE_URL", "REDIS_URL", "CLAN_NAME", "CLAN_SECRET",
-                "CLAN_SECRET_FILE", "APP_VERSION"):
+                "CLAN_SECRET_FILE", "APP_VERSION", "APP_REVISION"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -25,6 +25,15 @@ def client():
 
 def test_healthz(client):
     assert client.get("/healthz").status_code == 200
+
+
+def test_home_shows_version_and_revision(client, monkeypatch):
+    assert "Revision: unknown" in client.get("/").text
+    monkeypatch.setenv("APP_VERSION", "9.9.9")
+    monkeypatch.setenv("APP_REVISION", "abc1234")
+    page = client.get("/").text
+    assert "Version: 9.9.9" in page
+    assert "Revision: abc1234" in page
 
 
 def test_ready_without_dependencies(client):

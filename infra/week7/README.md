@@ -15,7 +15,7 @@ The Week 5 and 6 manifests as one Helm chart, installed once per environment. De
 
 - Helm 3.8 or newer (verified with Helm 4.2.1) and a cluster with an Ingress controller. k3s (Rancher Desktop) ships Traefik.
 - About 4 GB of memory in the Rancher Desktop VM to run both environments.
-- An image with `CLAN_SECRET_FILE` support. The default pin in `urdnot/values.yaml` (`sha-0b1eec1`) predates it, so until the pin is bumped, use a locally built image (below).
+- An image with `CLAN_SECRET_FILE` support. The default pin in `urdnot/values.yaml` (`sha-66e9028`, bumped in Week 8) has it.
 
 ## Secrets
 
@@ -89,10 +89,10 @@ A changed ConfigMap value rolls the API Pods. A changed `secrets.clanSecret` doe
 ## Package and publish the chart
 
 ```sh
-helm package infra/week7/urdnot                 # writes urdnot-0.1.0.tgz
+helm package infra/week7/urdnot                 # writes urdnot-0.1.1.tgz
 helm registry login ghcr.io -u <github-user>    # token needs the write:packages scope
-helm push urdnot-0.1.0.tgz oci://ghcr.io/torehan06/charts
-helm install urdnot oci://ghcr.io/torehan06/charts/urdnot --version 0.1.0 -n urdnot-dev --create-namespace -f ...
+helm push urdnot-0.1.1.tgz oci://ghcr.io/torehan06/charts
+helm install urdnot oci://ghcr.io/torehan06/charts/urdnot --version 0.1.1 -n urdnot-dev --create-namespace -f ...
 ```
 
 A version can be pushed only once in practice: bump `version` in `Chart.yaml` for every change to the chart. Don't commit the `.tgz`.

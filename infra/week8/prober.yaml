@@ -1,0 +1,51 @@
+# Week 8: a Pod that requests the API through its Service about five times a
+# second and prints one line per request: "<time> <HTTP status>". Status 000
+# means no HTTP answer at all (connection refused, reset or timed out).
+#
+# scripts/rollout-probe.sh starts it before a deployment and counts the lines
+# afterwards. Any line that isn't 200 is a request a user would have lost.
+#
+# It runs inside the cluster and makes a new connection for every request, so
+# each one is routed again to whichever Pods are Ready at that moment. A
+# `kubectl port-forward` can't measure this: it tunnels to one Pod and breaks
+# when that Pod is replaced.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rollout-prober
+  labels:
+    app.kubernetes.io/name: rollout-prober
+    app.kubernetes.io/part-of: urdnot
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
+      command:
+        - sh
+        - -c
+        - |
+          while true; do
+            code="$(curl -s -o /dev/null -m 2 -w '%{http_code}' http://urdnot-api/readyz)"
+            echo "$(date +%T) $code"
+            sleep 0.2
+          done
+      resources:
+        requests:
+          cpu: 20m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]

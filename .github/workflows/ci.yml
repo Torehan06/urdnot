@@ -1,13 +1,17 @@
-# Weeks 4-7: CI/CD for urdnot-api.
+# Weeks 4-8: CI/CD for urdnot-api.
 #
 #   test     unit tests on the runner's Python 3.12 (fast feedback, no Docker)
 #   smoke    build the image and run the full Compose stack, then hit it with
 #            scripts/smoke-test.sh (real Postgres and Redis)
-#   k8s      lint the Helm chart (infra/week7), build the image, install the
-#            chart on a throwaway kind cluster with the staging values, and
-#            run the same smoke test through a port-forward
+#   k8s      lint the Helm chart (infra/week7), then rehearse a deployment on
+#            a throwaway kind cluster: install the previous release, upgrade
+#            to this commit's image with scripts/deploy.sh while a prober
+#            counts lost requests (must be 0), run the smoke test, and check
+#            that a broken image is rolled back automatically
 #   publish  only on main, after all three pass: build linux/amd64 +
 #            linux/arm64 and push to ghcr.io/<owner>/urdnot-api
+#   deploy   only on main, after publish: helm upgrade the image that was
+#            just pushed onto a test cluster, again with zero lost requests
 #
 # Actions are pinned to a full commit SHA, like the image digests in the
 # Dockerfile: a tag such as v7 can be moved to different code, a SHA cannot.
@@ -104,6 +108,9 @@ jobs:
     timeout-minutes: 20
     env:
       KIND_CLUSTER: urdnot
+      # Read by scripts/deploy.sh and scripts/rollout-probe.sh.
+      NAMESPACE: urdnot
+      VALUES_EXTRA: values-ci.yaml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -126,7 +133,7 @@ jobs:
 
       # Same idea as the smoke job's .env: throwaway values, masked in logs.
       # secrets.env feeds the Kustomize render check and the smoke test;
-      # values-ci.yaml gives Helm the same secrets plus the image built above.
+      # values-ci.yaml gives Helm the same secrets.
       - name: Generate throwaway secrets
         run: |
           pg_password="$(openssl rand -hex 24)"
@@ -141,11 +148,6 @@ jobs:
           secrets:
             postgresPassword: "$pg_password"
             clanSecret: "$clan_secret"
-          api:
-            image:
-              repository: urdnot-api
-              tag: ci
-              digest: ""
           EOF
 
       # Static checks before anything is deployed. `helm template` renders
@@ -161,22 +163,32 @@ jobs:
           done
           kubectl kustomize infra/week6 >/dev/null
 
-      # The same command as a real install, with the staging values. kind has
-      # no Ingress controller, so the Ingress is created but routes nothing;
-      # the smoke test uses a port-forward.
-      - name: Install the chart
+      # The starting point of the rehearsal: the image pinned in values.yaml,
+      # which main published earlier, pulled from GHCR. kind has no Ingress
+      # controller, so the Ingress is created but routes nothing.
+      - name: Install the previous release
         run: |
           helm upgrade --install urdnot infra/week7/urdnot \
             --namespace urdnot --create-namespace \
-            -f infra/week7/values-staging.yaml -f values-ci.yaml
+            -f infra/week7/values-staging.yaml -f values-ci.yaml \
+            --wait --timeout 5m
+          kubectl -n urdnot get pods,ingress
 
-      - name: Wait for the rollouts
+      # From here on a Pod in the cluster requests /readyz through the Service
+      # five times a second. Every failed request is counted.
+      - name: Start the rollout prober
+        run: scripts/rollout-probe.sh start
+
+      # The same script, with the same flags, as the deploy job and a laptop.
+      # The image is this commit's build, loaded into kind above.
+      - name: Upgrade to this commit's image
+        run: IMAGE_REPOSITORY=urdnot-api scripts/deploy.sh staging ci
+
+      - name: Assert that the upgrade lost no requests
         run: |
-          kubectl -n urdnot rollout status statefulset/postgres --timeout=180s
-          kubectl -n urdnot rollout status statefulset/redis --timeout=120s
-          kubectl -n urdnot rollout status deployment/urdnot-api --timeout=180s
-          helm -n urdnot status urdnot
-          kubectl -n urdnot get ingress urdnot-api
+          kubectl -n urdnot get deployment urdnot-api \
+            -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}' | grep -x 'urdnot-api:ci'
+          scripts/rollout-probe.sh check
 
       # port-forward to the Service picks one Pod and tunnels to it. Good
       # enough for a functional check; it doesn't test load balancing.
@@ -190,12 +202,37 @@ jobs:
           set -a; . infra/week5/secrets.env; set +a
           BASE_URL=http://127.0.0.1:8000 scripts/smoke-test.sh
 
+      # The other half of a safe deployment: a release that can't start must
+      # not take the running one down. This tag doesn't exist, so the new Pod
+      # never becomes Ready. Expected: deploy.sh fails, Helm rolls back, the
+      # old Pods are untouched and the prober still has zero failures.
+      - name: A broken image is rolled back
+        run: |
+          # Pods that are not being deleted. Right after an upgrade or a
+          # rollback, Pods of the replaced ReplicaSet are still terminating;
+          # they would make the two lists differ although nothing was lost.
+          live_pods() {
+            kubectl -n urdnot get pods -l app.kubernetes.io/name=urdnot-api -o json |
+              jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name' | sort
+          }
+          before="$(live_pods)"
+          if TIMEOUT=45s IMAGE_REPOSITORY=urdnot-api scripts/deploy.sh staging does-not-exist; then
+            echo "deploying a missing image succeeded; it should have failed" >&2
+            exit 1
+          fi
+          kubectl -n urdnot rollout status deployment/urdnot-api --timeout=60s
+          after="$(live_pods)"
+          [[ "$before" == "$after" ]] || { echo "the running Pods changed: $before -> $after" >&2; exit 1; }
+          helm -n urdnot status urdnot | grep -x 'STATUS: deployed'
+          scripts/rollout-probe.sh stop
+
       - name: Show cluster state on failure
         if: failure()
         run: |
           kubectl -n urdnot get all,pvc,events --sort-by=.metadata.creationTimestamp || true
           kubectl -n urdnot describe pods || true
           kubectl -n urdnot logs --all-containers --prefix -l 'app.kubernetes.io/name in (urdnot-api,postgres,redis)' --tail=100 || true
+          kubectl -n urdnot logs rollout-prober --tail=50 || true
           helm -n urdnot history urdnot || true
           cat /tmp/port-forward.log || true
 
@@ -207,6 +244,10 @@ jobs:
     permissions:
       contents: read
       packages: write # push to ghcr.io with the job's GITHUB_TOKEN
+    # What the deploy job needs to know: which image this run pushed.
+    outputs:
+      tag: ${{ steps.image.outputs.tag }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -215,7 +256,9 @@ jobs:
       # GHCR image names must be lowercase; the owner "Torehan06" is not.
       - name: Compute image name
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/urdnot-api" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/urdnot-api" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       # QEMU lets the amd64 runner build the arm64 image (for Apple silicon and
       # arm64 clusters later). The Dockerfile installs wheels only, so nothing
@@ -239,7 +282,8 @@ jobs:
             type=sha,format=short
             type=raw,value=main
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           # The checked-out directory, so .dockerignore applies exactly as locally.
           context: .
@@ -252,3 +296,104 @@ jobs:
             REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Week 8: continuous deployment. Every merge to main ends with the image
+  # that publish just pushed running on a Kubernetes cluster, put there by
+  # `helm upgrade` with no manual step.
+  #
+  # The cluster is a kind cluster created inside this job: GitHub's runners
+  # can't reach a laptop's cluster, and there is no cloud cluster yet. It is
+  # deleted with the runner, so this proves the deployment works; it doesn't
+  # leave an environment running. Pointing the same steps at a real cluster
+  # means replacing the kind step with credentials for that cluster.
+  deploy:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Shows each deployment under "Environments" on the repository page.
+    environment: test
+    # One deployment at a time, in order. A second merge waits for the first
+    # deployment to finish instead of racing it or cancelling it halfway.
+    concurrency:
+      group: deploy-test
+      cancel-in-progress: false
+    env:
+      KIND_CLUSTER: urdnot
+      NAMESPACE: urdnot
+      VALUES_EXTRA: values-ci.yaml
+      IMAGE_TAG: ${{ needs.publish.outputs.tag }}
+      IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          wait: 120s
+
+      # Throwaway values, as in the k8s job. A real environment would have
+      # its Secret created outside the pipeline (secrets.existingSecret).
+      - name: Generate throwaway secrets
+        run: |
+          pg_password="$(openssl rand -hex 24)"
+          clan_secret="$(openssl rand -hex 24)"
+          echo "::add-mask::$pg_password"
+          echo "::add-mask::$clan_secret"
+          echo "CLAN_SECRET=$clan_secret" >> "$GITHUB_ENV"
+          cat > values-ci.yaml <<EOF
+          secrets:
+            postgresPassword: "$pg_password"
+            clanSecret: "$clan_secret"
+          EOF
+
+      # What is "currently running": the image pinned in values.yaml.
+      - name: Install the previous release
+        run: |
+          helm upgrade --install urdnot infra/week7/urdnot \
+            --namespace urdnot --create-namespace \
+            -f infra/week7/values-staging.yaml -f values-ci.yaml \
+            --wait --timeout 5m
+
+      - name: Start the rollout prober
+        run: scripts/rollout-probe.sh start
+
+      # The image comes from GHCR by tag and digest: exactly the bytes that
+      # publish pushed. The package is public, so no pull secret is needed.
+      - name: Deploy the image that was just published
+        run: scripts/deploy.sh staging "$IMAGE_TAG" "$IMAGE_DIGEST"
+
+      - name: Assert that the deployment lost no requests
+        run: scripts/rollout-probe.sh stop
+
+      - name: Run the smoke test through a port-forward
+        run: |
+          kubectl -n urdnot port-forward svc/urdnot-api 8000:80 >/tmp/port-forward.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/ | grep -o 'Revision: [0-9a-f]*'
+          BASE_URL=http://127.0.0.1:8000 scripts/smoke-test.sh
+
+      - name: Summarize
+        run: |
+          {
+            echo "### Deployed \`$IMAGE_TAG\` to the test cluster"
+            echo
+            echo '```text'
+            kubectl -n urdnot get deployment urdnot-api -o wide
+            helm -n urdnot history urdnot
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n urdnot get all,pvc,events --sort-by=.metadata.creationTimestamp || true
+          kubectl -n urdnot describe pods || true
+          kubectl -n urdnot logs --all-containers --prefix -l 'app.kubernetes.io/name in (urdnot-api,postgres,redis)' --tail=100 || true
+          kubectl -n urdnot logs rollout-prober --tail=50 || true
+          helm -n urdnot history urdnot || true
+          cat /tmp/port-forward.log || true

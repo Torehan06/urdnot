@@ -64,7 +64,10 @@ LABEL org.opencontainers.image.title="urdnot-api" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 
-ENV APP_VERSION=${VERSION}
+# APP_REVISION is the commit the image was built from. The home page shows it,
+# so during a rollout you can see which build answered. Not a secret.
+ENV APP_VERSION=${VERSION} \
+    APP_REVISION=${REVISION}
 
 USER 10001:10001
 
