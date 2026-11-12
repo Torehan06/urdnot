@@ -208,13 +208,20 @@ jobs:
       # old Pods are untouched and the prober still has zero failures.
       - name: A broken image is rolled back
         run: |
-          before="$(kubectl -n urdnot get pods -l app.kubernetes.io/name=urdnot-api -o name | sort)"
+          # Pods that are not being deleted. Right after an upgrade or a
+          # rollback, Pods of the replaced ReplicaSet are still terminating;
+          # they would make the two lists differ although nothing was lost.
+          live_pods() {
+            kubectl -n urdnot get pods -l app.kubernetes.io/name=urdnot-api -o json |
+              jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name' | sort
+          }
+          before="$(live_pods)"
           if TIMEOUT=45s IMAGE_REPOSITORY=urdnot-api scripts/deploy.sh staging does-not-exist; then
             echo "deploying a missing image succeeded; it should have failed" >&2
             exit 1
           fi
           kubectl -n urdnot rollout status deployment/urdnot-api --timeout=60s
-          after="$(kubectl -n urdnot get pods -l app.kubernetes.io/name=urdnot-api -o name | sort)"
+          after="$(live_pods)"
           [[ "$before" == "$after" ]] || { echo "the running Pods changed: $before -> $after" >&2; exit 1; }
           helm -n urdnot status urdnot | grep -x 'STATUS: deployed'
           scripts/rollout-probe.sh stop
