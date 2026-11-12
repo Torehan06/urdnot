@@ -1,6 +1,7 @@
 from datetime import datetime
 import logging
 import socket
+import time
 
 from fastapi.testclient import TestClient
 import psycopg
@@ -13,7 +14,8 @@ from app.main import create_app
 @pytest.fixture(autouse=True)
 def environment(monkeypatch):
     for key in ("DATABASE_URL", "REDIS_URL", "CLAN_NAME", "CLAN_SECRET",
-                "CLAN_SECRET_FILE", "APP_VERSION", "APP_REVISION"):
+                "CLAN_SECRET_FILE", "APP_VERSION", "APP_REVISION",
+                "SESSION_TTL_SECONDS"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -68,6 +70,118 @@ def test_hollows_requires_secret(client, headers):
 def test_headbutts_increment(client):
     assert client.get("/api/headbutts").json() == {"count": 1}
     assert client.get("/api/headbutts").json() == {"count": 2}
+
+
+def test_session_lifecycle(client):
+    assert client.get("/api/session").status_code == 401
+    response = client.post("/api/session", json={"name": "Wrex"})
+    assert response.status_code == 201
+    assert response.json() == {"name": "Wrex", "visits": 0,
+                               "served_by": socket.gethostname(), "store": "in-process"}
+    cookie = response.headers["set-cookie"]
+    assert "HttpOnly" in cookie and "Max-Age=3600" in cookie
+    # TestClient keeps the cookie, like a browser.
+    assert client.get("/api/session").json()["visits"] == 1
+    assert client.get("/api/session").json()["visits"] == 2
+    assert client.delete("/api/session").status_code == 204
+    assert client.get("/api/session").status_code == 401
+
+
+def test_session_rejects_unknown_token_and_bad_name(client):
+    client.cookies.set("urdnot_session", "made-up")
+    assert client.get("/api/session").status_code == 401
+    assert client.post("/api/session", json={"name": ""}).status_code == 422
+
+
+def test_in_process_sessions_are_not_shared_between_replicas():
+    # Two app instances stand in for two replicas without Redis: the second
+    # one has never heard of the session the first one created.
+    with TestClient(create_app()) as first, TestClient(create_app()) as second:
+        token = first.post("/api/session", json={"name": "Wrex"}).cookies["urdnot_session"]
+        second.cookies.set("urdnot_session", token)
+        assert first.get("/api/session").status_code == 200
+        assert second.get("/api/session").status_code == 401
+
+
+def test_session_expires(monkeypatch):
+    monkeypatch.setenv("SESSION_TTL_SECONDS", "1")
+    with TestClient(create_app()) as session:
+        session.post("/api/session", json={"name": "Wrex"})
+        assert session.get("/api/session").status_code == 200
+        now = time.monotonic()
+        monkeypatch.setattr(time, "monotonic", lambda: now + 2)
+        assert session.get("/api/session").status_code == 401
+
+
+def test_session_ttl_must_be_positive(monkeypatch):
+    monkeypatch.setenv("SESSION_TTL_SECONDS", "0")
+    with pytest.raises(ValueError):
+        create_app()
+
+
+class FakeRedis:
+    """Enough of the Redis client for the session handlers, shared like a server."""
+
+    def __init__(self):
+        self.data, self.ttl, self.queued = {}, {}, []
+
+    def pipeline(self):
+        return self
+
+    def hset(self, key, mapping):
+        self.queued.append(lambda: self.data.setdefault(key, {}).update(
+            {k: str(v).encode() for k, v in mapping.items()}))
+
+    def hget(self, key, field):
+        self.queued.append(lambda: self.data.get(key, {}).get(field))
+
+    def hincrby(self, key, field, amount):
+        def run():
+            entry = self.data.setdefault(key, {})
+            entry[field] = str(int(entry.get(field, b"0")) + amount).encode()
+            return int(entry[field])
+        self.queued.append(run)
+
+    def expire(self, key, seconds):
+        self.queued.append(lambda: self.ttl.__setitem__(key, seconds))
+
+    def execute(self):
+        queued, self.queued = self.queued, []
+        return [command() for command in queued]
+
+    def delete(self, key):
+        self.data.pop(key, None)
+
+    def close(self):
+        pass
+
+
+def test_redis_sessions_are_shared_between_replicas(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("SESSION_TTL_SECONDS", "90")
+    monkeypatch.setattr(redis.Redis, "from_url", lambda *args, **kwargs: fake)
+    with TestClient(create_app()) as first, TestClient(create_app()) as second:
+        created = first.post("/api/session", json={"name": "Wrex"})
+        assert created.json()["store"] == "redis"
+        token = created.cookies["urdnot_session"]
+        second.cookies.set("urdnot_session", token)
+        assert first.get("/api/session").json()["visits"] == 1
+        assert second.get("/api/session").json() == {
+            "name": "Wrex", "visits": 2,
+            "served_by": socket.gethostname(), "store": "redis"}
+        # Redis holds a hash of the token, never the token, and a TTL.
+        (key,) = fake.data
+        assert token not in key
+        assert fake.ttl[key] == 90
+        # An unknown token must not leave an empty session behind.
+        second.cookies.set("urdnot_session", "made-up")
+        assert second.get("/api/session").status_code == 401
+        assert len(fake.data) == 1
+        second.cookies.set("urdnot_session", token)
+        assert second.delete("/api/session").status_code == 204
+        assert first.get("/api/session").status_code == 401
+        assert fake.data == {}
 
 
 def test_charge_consumes_cpu(client):
@@ -163,6 +277,8 @@ def test_configured_outage_keeps_liveness(monkeypatch, dependencies):
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         monkeypatch.setattr(redis.Redis, "ping", redis_down)
         monkeypatch.setattr(redis.Redis, "incr", redis_down)
+        monkeypatch.setattr(redis.Redis, "pipeline", redis_down)
+        monkeypatch.setattr(redis.Redis, "delete", redis_down)
     with TestClient(create_app()) as session:
         assert session.get("/healthz").status_code == 200
         assert session.get("/").status_code == 200
@@ -175,3 +291,7 @@ def test_configured_outage_keeps_liveness(monkeypatch, dependencies):
                                 headers={"X-Clan-Secret": "shiagur"}).status_code == 503
         if "redis" in dependencies:
             assert session.get("/api/headbutts").status_code == 503
+            assert session.post("/api/session", json={"name": "A"}).status_code == 503
+            session.cookies.set("urdnot_session", "any")
+            assert session.get("/api/session").status_code == 503
+            assert session.delete("/api/session").status_code == 503

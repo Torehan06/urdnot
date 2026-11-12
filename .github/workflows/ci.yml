@@ -6,8 +6,9 @@
 #   k8s      lint the Helm chart (infra/week7), then rehearse a deployment on
 #            a throwaway kind cluster: install the previous release, upgrade
 #            to this commit's image with scripts/deploy.sh while a prober
-#            counts lost requests (must be 0), run the smoke test, and check
-#            that a broken image is rolled back automatically
+#            counts lost requests (must be 0), run the smoke test, check
+#            with k6 that every replica knows every session (Week 9), and
+#            check that a broken image is rolled back automatically
 #   publish  only on main, after all three pass: build linux/amd64 +
 #            linux/arm64 and push to ghcr.io/<owner>/urdnot-api
 #   deploy   only on main, after publish: helm upgrade the image that was
@@ -202,6 +203,19 @@ jobs:
           set -a; . infra/week5/secrets.env; set +a
           BASE_URL=http://127.0.0.1:8000 scripts/smoke-test.sh
 
+      # Week 9. The staging values turn the autoscaler on. kind has no
+      # metrics-server, so the HPA can't measure CPU here and never scales
+      # up; it still has to exist and hold its minimum of two Pods. Then a
+      # short k6 run logs in and reads its sessions through the Service. With
+      # two Pods behind it, that fails unless sessions are in Redis. Scaling
+      # under load is measured on a cluster with metrics (infra/week9/README.md).
+      - name: Sessions work on every replica
+        run: |
+          kubectl -n urdnot get hpa urdnot-api
+          [[ "$(kubectl -n urdnot get deployment urdnot-api -o jsonpath='{.status.readyReplicas}')" -ge 2 ]]
+          VUS=4 RAMP_UP=5s HOLD=20s RAMP_DOWN=5s CHARGE_MS=20 \
+            EXPECT_SCALE_UP=0 WAIT_SCALE_DOWN=0 scripts/load-test.sh
+
       # The other half of a safe deployment: a release that can't start must
       # not take the running one down. This tag doesn't exist, so the new Pod
       # never becomes Ready. Expected: deploy.sh fails, Helm rolls back, the
@@ -233,6 +247,7 @@ jobs:
           kubectl -n urdnot describe pods || true
           kubectl -n urdnot logs --all-containers --prefix -l 'app.kubernetes.io/name in (urdnot-api,postgres,redis)' --tail=100 || true
           kubectl -n urdnot logs rollout-prober --tail=50 || true
+          kubectl -n urdnot logs load-test --tail=50 || true
           helm -n urdnot history urdnot || true
           cat /tmp/port-forward.log || true
 

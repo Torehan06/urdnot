@@ -1,6 +1,7 @@
-# urdnot-api: Service, Deployment and PodDisruptionBudget. The same objects as
+# urdnot-api: Service, Deployment, PodDisruptionBudget and (Week 9)
+# HorizontalPodAutoscaler. The first three are the objects from
 # infra/week5/api.yaml with the Week 6 patch applied; the design reasons are in
-# docs/week-05.md and docs/week-06.md.
+# docs/week-05.md, docs/week-06.md and docs/week-09.md.
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,7 +28,12 @@ metadata:
     app.kubernetes.io/component: api
     {{- include "urdnot.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicaCount }}
+  {{- end }}
+  {{- /* With autoscaling the field is left out on purpose: the
+  HorizontalPodAutoscaler owns the replica count. A number here would reset
+  it on every `helm upgrade`, also in the middle of a load peak. */}}
   revisionHistoryLimit: 5
   selector:
     matchLabels:
@@ -133,10 +139,10 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi
-{{- if gt (int .Values.api.replicaCount) 1 }}
+{{- if gt (include "urdnot.apiMinReplicas" . | int) 1 }}
 ---
-# Only with 2+ replicas: with one replica, minAvailable 1 would forbid every
-# voluntary eviction and block a node drain.
+# Only with 2+ replicas (the autoscaler's minimum counts): with one replica,
+# minAvailable 1 would forbid every voluntary eviction and block a node drain.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -150,4 +156,53 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: urdnot-api
+{{- end }}
+{{- with .Values.api.autoscaling }}
+{{- if .enabled }}
+---
+# Week 9. Every 15 seconds the HPA controller reads the Pods' CPU usage from
+# the metrics API (metrics-server) and computes
+#
+#   desired = ceil(current replicas * average utilization / target)
+#
+# Utilization is usage divided by the container's CPU *request*, not its
+# limit: api.resources.requests.cpu and the target below belong together.
+# Without metrics-server the HPA still keeps minReplicas but can't scale.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: urdnot-api
+  labels:
+    app.kubernetes.io/name: urdnot-api
+    app.kubernetes.io/component: api
+    {{- include "urdnot.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: urdnot-api
+  minReplicas: {{ .minReplicas }}
+  maxReplicas: {{ required "api.autoscaling.maxReplicas is required" .maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .targetCPUUtilizationPercentage }}
+  behavior:
+    # Up: act on the newest reading. Kubernetes' default policy applies
+    # (at most double the Pods, or +4, per 15 seconds).
+    scaleUp:
+      stabilizationWindowSeconds: 0
+    # Down: use the highest recommendation of the last N seconds, so a short
+    # dip in load doesn't remove Pods that are needed again a minute later.
+    # Then remove at most one Pod per minute.
+    scaleDown:
+      stabilizationWindowSeconds: {{ .scaleDownStabilizationSeconds }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+{{- end }}
 {{- end }}

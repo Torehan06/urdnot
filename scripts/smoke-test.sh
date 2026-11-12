@@ -37,7 +37,8 @@ pass "/readyz 200"
 status GET / >/dev/null
 grep -q 'Storage: postgres' "$body_file" || fail "home page does not report postgres storage"
 grep -q 'Counter: redis' "$body_file" || fail "home page does not report redis counter"
-pass "storage=postgres, counter=redis"
+grep -q 'Sessions: redis' "$body_file" || fail "home page does not report redis sessions"
+pass "storage=postgres, counter=redis, sessions=redis"
 
 # Writes need the clan secret.
 code="$(status POST /api/hollows -H 'Content-Type: application/json' \
@@ -64,6 +65,22 @@ status GET /api/headbutts >/dev/null
 second="$(tr -dc '0-9' <"$body_file")"
 (( second == first + 1 )) || fail "headbutts went $first -> $second, want +1"
 pass "headbutts $first -> $second"
+
+# Sessions (Week 9): log in, send the cookie back, log out. The store must be
+# Redis, or two replicas would not agree on who is logged in.
+cookie_jar="$(mktemp)"
+trap 'rm -f "$body_file" "$cookie_jar"' EXIT
+[[ "$(status GET /api/session)" == 401 ]] || fail "GET /api/session without a cookie is not 401"
+code="$(status POST /api/session -c "$cookie_jar" -H 'Content-Type: application/json' \
+  -d '{"name":"smoke"}')"
+[[ "$code" == 201 ]] || fail "POST /api/session returned $code: $(cat "$body_file")"
+grep -q '"store":"redis"' "$body_file" || fail "session is not stored in Redis: $(cat "$body_file")"
+code="$(status GET /api/session -b "$cookie_jar")"
+[[ "$code" == 200 ]] || fail "GET /api/session with the cookie returned $code"
+grep -q '"name":"smoke","visits":1' "$body_file" || fail "unexpected session: $(cat "$body_file")"
+[[ "$(status DELETE /api/session -b "$cookie_jar")" == 204 ]] || fail "DELETE /api/session is not 204"
+[[ "$(status GET /api/session -b "$cookie_jar")" == 401 ]] || fail "session still valid after logout"
+pass "session login, read from Redis, logout"
 
 # Prometheus exposition is served and counts requests.
 status GET /metrics >/dev/null

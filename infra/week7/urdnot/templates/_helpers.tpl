@@ -17,6 +17,16 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- .Values.secrets.existingSecret | default "urdnot-secrets" -}}
 {{- end }}
 
+{{/* The fewest API Pods that can be running: the autoscaler's minimum when it
+is on, else the fixed replica count. */}}
+{{- define "urdnot.apiMinReplicas" -}}
+{{- if .Values.api.autoscaling.enabled -}}
+{{ .Values.api.autoscaling.minReplicas }}
+{{- else -}}
+{{ .Values.api.replicaCount }}
+{{- end -}}
+{{- end }}
+
 {{/* repository:tag, plus @digest when one is set. */}}
 {{- define "urdnot.apiImage" -}}
 {{- with .Values.api.image -}}

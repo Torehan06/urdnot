@@ -8,7 +8,8 @@ It is the application layer for a 12-week DevOps curriculum that takes a service
 | `HOST` | `127.0.0.1` | Listen address; loopback-only for use behind a reverse proxy. |
 | `PORT` | `8000` | HTTP listen port. |
 | `DATABASE_URL` | Unset | Postgres connection URL; unset or empty uses an in-memory dict. |
-| `REDIS_URL` | Unset | Redis connection URL; unset or empty uses an in-process counter. |
+| `REDIS_URL` | Unset | Redis connection URL for the counter and for sessions; unset or empty keeps both in the process's memory. |
+| `SESSION_TTL_SECONDS` | `3600` | A session expires this many seconds after its last request. Read at startup; must be at least 1. |
 | `APP_VERSION` | `0.1.0` | Version displayed on the home page. |
 | `APP_REVISION` | `unknown` | Git commit the image was built from, displayed on the home page. The Dockerfile sets it from the `REVISION` build argument. |
 | `LOG_LEVEL` | `info` | Diagnostic log level; request access records always emit at info. |
@@ -39,13 +40,16 @@ The light naming theme comes from the krogan clans in Mass Effect. The Hollows h
 
 | Method and path | Behavior |
 | --- | --- |
-| `GET /` | Tiny HTML page with clan name, prominent hostname, version, revision, uptime, storage mode, and counter mode. |
+| `GET /` | Tiny HTML page with clan name, prominent hostname, version, revision, uptime, storage mode, counter mode, and session mode. |
 | `GET /healthz` | Always 200 when served; checks no dependencies. |
 | `GET /readyz` | 200 when ready. Checks only configured backends; failures return 503 with `failing_dependencies`, e.g. `["postgres", "redis"]`. |
 | `GET /metrics` | Prometheus exposition, including `http_requests_total{path,status}` and `http_request_duration_seconds{path}` histogram. |
 | `GET /api/hollows` | List records. |
 | `POST /api/hollows` | Create `{ "name": "...", "text": "..." }`; returns 201, or 403 for a missing/incorrect `X-Clan-Secret`. |
 | `GET /api/headbutts` | Increment and return `{ "count": 1 }`; Redis uses `INCR urdnot-api:headbutts`. |
+| `POST /api/session` | Log in with `{ "name": "..." }` (1–64 characters); returns 201 and sets the `urdnot_session` cookie. No password: the point is where session state lives. |
+| `GET /api/session` | The session for the cookie: `name`, `visits` (counts these requests), `served_by` (hostname of the replica that answered), `store` (`redis` or `in-process`). 401 without a valid session. |
+| `DELETE /api/session` | Log out; returns 204. |
 | `GET /api/charge?ms=200` | Burn CPU and return `requested_ms`, actual wall-clock `duration_ms`, and `cpu_ms`. Accepts 1–10000 ms; default 200. |
 
 ```sh
@@ -58,11 +62,14 @@ curl -fsS -X POST http://127.0.0.1:8000/api/hollows \
   -d '{"name":"Shiagur","text":"Remembered in the Hollows."}'
 curl -fsS http://127.0.0.1:8000/api/hollows
 curl -fsS http://127.0.0.1:8000/api/headbutts
+curl -fsS -c cookies.txt -X POST http://127.0.0.1:8000/api/session \
+  -H 'Content-Type: application/json' -d '{"name":"Wrex"}'
+curl -fsS -b cookies.txt http://127.0.0.1:8000/api/session
 ```
 
 ## Operating behavior
 
-Startup logs identify the selected storage and counter modes. In-memory records and counters are per-process, reset on restart, and are not shared across replicas. Configured backends never silently fall back: their affected application endpoints return 503 during an outage, while liveness remains independent.
+Startup logs identify the selected storage, counter, and session modes. In-memory records, counters, and sessions are per-process, reset on restart, and are not shared across replicas: without Redis, a session created on one replica gets 401 from every other one. With `REDIS_URL` set the process holds no user state, so replicas can be added and removed freely (Week 9). The session cookie is `HttpOnly` and `SameSite=Lax`; Redis stores a SHA-256 of its value with a sliding expiry. Configured backends never silently fall back: their affected application endpoints return 503 during an outage, while liveness remains independent.
 
 The `hollows` table is created on startup when Postgres is configured. If startup cannot reach Postgres, the process still starts; readiness and record requests retry initialization after recovery. Use a database role allowed to create this table. There is no migration framework.
 
@@ -72,7 +79,7 @@ The charge handler runs real Python computation in a worker thread and measures 
 
 On SIGTERM, the entry point tells Uvicorn to stop accepting connections, waits for in-flight requests and application cleanup, and exits with status 0. Allow enough termination grace time for the active workload.
 
-The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). [`infra/week7`](infra/week7/README.md) packages all of it as a Helm chart with a values file per environment (Week 7). [`infra/week8`](infra/week8/README.md) and [`scripts/deploy.sh`](scripts/deploy.sh) deploy a published image with `helm upgrade`, by hand or from the pipeline (Week 8). Autoscaling and monitoring infrastructure remain later curriculum exercises.
+The repository contains the application and its documentation. The completed Ubuntu, Bash, Nginx, SSH, DNS, and firewall lab configuration is documented in [infra/week1](infra/week1/README.md). The `app/` directory holds the service; `infra/` holds server and deployment configuration, one folder per curriculum week. [`compose.yaml`](compose.yaml) runs the service with Postgres and Redis (Week 3). [`.github/workflows/ci.yml`](.github/workflows/ci.yml) tests every push and pull request and publishes the image on `main` (Week 4). [`infra/week5`](infra/week5/README.md) deploys the service, Postgres, and Redis to Kubernetes (Week 5). [`infra/week6`](infra/week6/README.md) is an overlay on top of it: an Ingress for `urdnot.localhost` and a clan secret mounted as a file that can be rotated without a restart (Week 6). [`infra/week7`](infra/week7/README.md) packages all of it as a Helm chart with a values file per environment (Week 7). [`infra/week8`](infra/week8/README.md) and [`scripts/deploy.sh`](scripts/deploy.sh) deploy a published image with `helm upgrade`, by hand or from the pipeline (Week 8). [`infra/week9`](infra/week9/README.md) and [`scripts/load-test.sh`](scripts/load-test.sh) put load on the service with k6 and watch the chart's HorizontalPodAutoscaler add and remove Pods (Week 9). Monitoring infrastructure remains a later curriculum exercise.
 
 ## Run in a container
 
@@ -117,7 +124,7 @@ helm upgrade --install urdnot infra/week7/urdnot -n urdnot-dev --create-namespac
 curl -fsS http://dev.urdnot.localhost/healthz
 ```
 
-The chart in [`infra/week7/urdnot`](infra/week7/urdnot) deploys the same objects as `infra/week6`. `values-dev.yaml` (1 replica, debug logging) and `values-staging.yaml` (2 replicas) each install a separate environment into its own namespace. `values-local.yaml` is git-ignored and holds the secrets. See [infra/week7/README.md](infra/week7/README.md) for the runbook and [docs/week-07.md](docs/week-07.md) for the design.
+The chart in [`infra/week7/urdnot`](infra/week7/urdnot) deploys the same objects as `infra/week6`. `values-dev.yaml` (1 replica, debug logging) and `values-staging.yaml` (2 to 5 replicas, set by a HorizontalPodAutoscaler) each install a separate environment into its own namespace. `values-local.yaml` is git-ignored and holds the secrets. See [infra/week7/README.md](infra/week7/README.md) for the runbook and [docs/week-07.md](docs/week-07.md) for the design.
 
 ## Tests
 
@@ -128,7 +135,7 @@ python -m pip install -r app/requirements-dev.txt
 python -m pytest app/tests -q
 ```
 
-Tests clear backend environment variables and need no running Postgres or Redis. They cover fallback endpoints, authentication, request-time configuration, metrics/logging, CPU work, and simulated configured-backend outages.
+Tests clear backend environment variables and need no running Postgres or Redis. They cover fallback endpoints, authentication, request-time configuration, sessions (in-process, and Redis through a small fake), metrics/logging, CPU work, and simulated configured-backend outages.
 
 ## CI/CD
 
