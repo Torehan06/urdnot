@@ -172,8 +172,9 @@ The HPA's own record (`kubectl describe hpa`): `New size: 4` and `New size: 5` w
 
 **A load that fits** (`VUS=3 scripts/load-test.sh urdnot-staging`). Three users are about 0.8 cores of work. The HPA went 2 → 3 → 4 → 5 Pods within two minutes and then held 5 Pods at 62% to 66%, inside the tolerance around the 70% target, so it stopped changing anything. 3005 requests, 0 failed, p95 107 ms. Compare that with 282 ms in the 10-user run, where the Pods were over their target and no more could be added. Scale-down again started 5 minutes after the load ended and reached 2 Pods after 7 minutes. Over the whole session the Week 8 prober counted 9359 requests, 0 failed.
 
+**CI.** The changed `k8s` job passed on the pull request (Torehan06/urdnot#11) and again on `main` after the merge: the HPA existed, two Pods were Ready, and the short k6 run made 640 requests with 0 failed and every session check passed. The same command gave the same result on staging. On `main` the `publish` and `deploy` jobs then deployed `sha-80c4086` with the prober reporting no lost requests.
+
 **Not verified:**
-- The changed `k8s` job in CI (HPA present, two Pods, short k6 run). It runs when this branch is pushed. The same k6 command passed on staging: 640 requests, 0 failed.
 - Scaling in CI. kind has no metrics-server there, so only the session check runs.
 - Behaviour when the node is full (Pods `Pending`). Five Pods reserve 1.25 of 4 cores, so the limit wasn't reached.
 - A rolling update during a load peak.

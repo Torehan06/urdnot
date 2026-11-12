@@ -9,7 +9,7 @@ Week 7 packages the Kubernetes manifests from Weeks 5 and 6 as a Helm chart, [`i
 | Chart `urdnot` 0.1.0 | `infra/week7/urdnot/` | API, Ingress, ConfigMap, Secret, Postgres and Redis. Renders the same objects as `kubectl kustomize infra/week6` (compared field by field, see Verification). |
 | Default values | `infra/week7/urdnot/values.yaml` | Replicas, image, `CLAN_NAME`, `LOG_LEVEL`, resources, Ingress class and host, storage sizes, secrets |
 | dev environment | `infra/week7/values-dev.yaml` | 1 replica, `debug`, `dev.urdnot.localhost`, namespace `urdnot-dev` |
-| staging environment | `infra/week7/values-staging.yaml` | 2 replicas, `info`, `staging.urdnot.localhost`, namespace `urdnot-staging` |
+| staging environment | `infra/week7/values-staging.yaml` | 2 replicas, `info`, `staging.urdnot.localhost`, namespace `urdnot-staging`. Since Week 9 an autoscaler sets the count, between 2 and 5. |
 | Secrets and local image | `infra/week7/values-local.yaml` (git-ignored) | Template in `values-local.yaml.example` |
 | CI | `.github/workflows/ci.yml` | The `k8s` job lints and renders the chart for both environments, then installs it on kind with `helm upgrade --install` instead of `kubectl apply -k` |
 
@@ -38,7 +38,7 @@ The two tools solve the same problem differently. Kustomize patches finished YAM
 - **Fixed resource names, not `<release>-urdnot-api`.** Generated charts prefix every name with the release name, so two releases can share a namespace. Here the names stay `urdnot-api`, `postgres` and `redis`: the manifests read like Week 5's, and `DATABASE_URL` can keep pointing at `postgres`. The cost: one release per namespace. Environments are separated by namespace, so this never collides.
 - **dev and staging as two namespaces in one cluster.** That's enough to show one chart producing two different deployments. Real environments are usually separate clusters; the commands are the same with a different `--kube-context`.
 - **Values files hold only differences.** `values-dev.yaml` is seven lines of settings. If a default changes in `values.yaml`, both environments get it, and a reviewer sees at a glance how dev differs from staging.
-- **No PodDisruptionBudget with one replica.** `minAvailable: 1` on a single Pod forbids every voluntary eviction, so a node drain would hang. The template renders the PDB only when `api.replicaCount` is above 1. A patch can't express that kind of condition; a template can.
+- **No PodDisruptionBudget with one replica.** `minAvailable: 1` on a single Pod forbids every voluntary eviction, so a node drain would hang. The template renders the PDB only when `api.replicaCount` is above 1 (since Week 9: when the smallest possible number of Pods is above 1, which is the autoscaler's `minReplicas` where it is on). A patch can't express that kind of condition; a template can.
 - **Secrets through a git-ignored values file.** It keeps one way of passing settings. The trade-off is that Helm stores supplied values in the release Secret, so `helm get values` shows them to anyone who can read Secrets in the namespace. Such a person could read `urdnot-secrets` anyway, so nothing new leaks. `secrets.existingSecret` covers the stricter setup: someone else (or a tool such as External Secrets or Sealed Secrets) creates the Secret and the chart only references it.
 - **The clan secret stays a mounted file with a fixed Secret name**, so Week 6's live rotation still works through `helm upgrade`.
 - **`upgrade --install` everywhere.** One idempotent command for first install and every later change. It's also the command a pipeline runs (Week 8).
@@ -129,10 +129,11 @@ The config change rolled the Pod only because of the `checksum/config` annotatio
 
 **Packaging.** `helm package infra/week7/urdnot` produced `urdnot-0.1.0.tgz` with `Chart.yaml`, `values.yaml` and the eight template files.
 
+**In CI (added 2026-11-12):** the `k8s` job with the Helm steps passed on the pull request (Torehan06/urdnot#9). GitHub's runner has Helm 3.
+
 **Not verified:**
-- CI with the new Helm steps. `actionlint` passes locally, but the job itself runs only when this branch is pushed. The Helm version on GitHub's runner is not known; the steps use only commands that exist in Helm 3 and 4.
 - `helm push` to GHCR. Not run: it publishes a package, so it waits for the owner.
-- The default image pin with this chart. It can't work until an image with `CLAN_SECRET_FILE` is published (see open items).
+- The default image pin with this chart, at the time of writing. Week 8 bumped the pin to `sha-66e9028`, which has `CLAN_SECRET_FILE`, and CI has installed the chart with that pin on every run since.
 - `secrets.existingSecret` on a cluster. Only its render was checked (no Secret created, all three references renamed).
 - Argo CD and Flux. Described, not installed.
 
@@ -154,7 +155,7 @@ The config change rolled the Pod only because of the `checksum/config` annotatio
 3. Swap the order of the `-f` flags so `values-local.yaml` comes first. What could go wrong if both files set the same key?
 4. Change `postgres.storage` to `2Gi` and run the upgrade. Read the error. Why does Kubernetes refuse, and what does that tell you about what a Helm upgrade can and can't change?
 5. Run `kubectl -n urdnot-dev get secret` and find Helm's release Secrets. How many are there after three upgrades, and what limits their number (`--history-max`)?
-6. Set `api.replicaCount: 1` for staging and upgrade. What happens to the PodDisruptionBudget, and how did Helm know to delete it?
+6. Upgrade staging with `--set api.autoscaling.enabled=false --set api.replicaCount=1`. What happens to the PodDisruptionBudget, and how did Helm know to delete it? (Since Week 9 staging uses the autoscaler, which ignores `replicaCount`, so it has to be turned off for this exercise. Deploy staging normally afterwards.)
 7. Edit the live Deployment by hand (`kubectl -n urdnot-dev scale deploy/urdnot-api --replicas=3`), then run the unchanged install command. Does Helm put it back? How would Argo CD or Flux have behaved differently, and when?
 8. A teammate wants a `prod` environment. Which files would you add, and which values would you insist are different from staging?
 
