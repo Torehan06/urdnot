@@ -146,7 +146,7 @@ The same Pods kept serving with 0 restarts. Restoring the original value took ab
 **`apply` noise.** Every re-apply reports the two StatefulSets and the PodDisruptionBudget as `configured`. `kubectl diff` shows no difference and no Pod restarts, so this is client-side apply bookkeeping, not drift.
 
 **Not verified:**
-- CI on kind with the new overlay. That runs when this branch is pushed. kind has no Ingress controller, so CI covers the secret file (through the smoke test) and the Ingress's namespace, but not routing.
+- CI on kind with the new overlay, at the time of writing. It then passed on the pull request (Torehan06/urdnot#8). kind has no Ingress controller, so CI covered the secret file (through the smoke test) and the Ingress's namespace, but not routing. Since Week 7, CI deploys the Helm chart instead and only renders this overlay.
 - An image published from `main` with `CLAN_SECRET_FILE`. It doesn't exist until this is merged.
 - Another Ingress controller than Traefik, and TLS.
 

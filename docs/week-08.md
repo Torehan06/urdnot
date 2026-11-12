@@ -105,10 +105,12 @@ deploy exit=1
 
 The two API Pods had the same names before and after, the Deployment's image was `week8-a` again, and the same prober that watched the three upgrades had counted 648 requests with 0 failed by the end of the failed deployment. The smoke test passed through the Ingress afterwards.
 
+**In CI (added 2026-11-12, after the pull request was pushed and merged):**
+- The `k8s` job failed on its first run, in the step "A broken image is rolled back". The rollback itself had worked: Helm reported `rolled back due to atomic being set` and revision 4 was `Rollback to 2`. The check was wrong. It compared the list of API Pods before and after, and both lists included Pods of a replaced ReplicaSet that were still terminating. It now compares only Pods without a `deletionTimestamp`, and the job passes.
+- The `deploy` job ran for the first time when the pull request was merged and passed: the published image was deployed by tag and digest with no lost requests, and the smoke test passed.
+- `--atomic` on Helm 3 is covered by this: GitHub's runner has Helm 3, so `deploy.sh` selected `--atomic` there, and the rollback worked. Locally (Helm 4) it selects `--rollback-on-failure`.
+
 **Not verified:**
-- The changed `k8s` job. It runs when this branch is pushed.
-- The `deploy` job. It runs only on `main`, so its first run is the merge of this week's pull request. Its steps are the same scripts as the `k8s` job, plus pulling the image from GHCR by digest.
-- `--atomic` on Helm 3. The script selects it when `--rollback-on-failure` is missing; only Helm 4 was available to test.
 - A release that fails its readiness probe (as opposed to a missing image). Same mechanism, not run.
 
 ## What you should be able to explain in an interview
@@ -138,7 +140,7 @@ The two API Pods had the same names before and after, the Deployment's image was
 - **No environment stays running.** The test cluster lives for one job. `urdnot-staging` on Rancher Desktop is deployed only by hand (`scripts/deploy.sh`). A persistent target needs a reachable cluster (Week 10 creates cloud infrastructure).
 - **One lost request in the first Ingress measurement, cause unknown.** 1 of 480 requests through the Ingress got no answer; none of the 697 through the Service did. Candidates: Traefik still routing to a Pod that had just exited, or the port-forward between macOS and the Rancher Desktop VM. To investigate, repeat with timestamps and compare against Traefik's access log. If it is Traefik, a longer `preStop` sleep is the usual fix.
 - **The prober measures the Service path only in CI.** kind has no Ingress controller, so the Ingress hop is not covered there.
-- **The prober checks one request at a time.** It would not catch long requests cut off by a shutdown. A load test with concurrent requests (Week 9 uses k6 or ab) covers that.
+- **The prober checks one request at a time.** It would not catch long requests cut off by a shutdown. Week 9 added a k6 load test with concurrent requests (`scripts/load-test.sh`), but it has not yet been run during a rollout.
 - **The baseline for the upgrade is the pinned image**, not "whatever was deployed last". As the pin ages, the rehearsal upgrades across more commits. Bump it now and then; nothing depends on it for deployments.
 - **The Postgres and Redis image pins are still in three places** and the Kustomize weeks are still only rendered by CI (as in Week 7).
 - **The chart is still not published from CI.** Deployments use the chart from the checked-out commit, so chart and image versions always match.

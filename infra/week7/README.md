@@ -6,7 +6,7 @@ The Week 5 and 6 manifests as one Helm chart, installed once per environment. De
 | --- | --- |
 | `urdnot/Chart.yaml` | Chart name, chart version, app version |
 | `urdnot/values.yaml` | Default values: every setting the templates read |
-| `urdnot/templates/` | The API (Service, Deployment, PodDisruptionBudget), Ingress, ConfigMap, Secret, Postgres, Redis, and `_helpers.tpl` |
+| `urdnot/templates/` | The API (Service, Deployment, PodDisruptionBudget, and since Week 9 an optional HorizontalPodAutoscaler), Ingress, ConfigMap, Secret, Postgres, Redis, and `_helpers.tpl` |
 | `values-dev.yaml` | dev: 1 replica, `debug` logging, host `dev.urdnot.localhost` |
 | `values-staging.yaml` | staging: 2 to 5 replicas set by the autoscaler (Week 9), `info` logging, host `staging.urdnot.localhost` |
 | `values-local.yaml.example` | Template for the git-ignored `values-local.yaml` (secrets, optional local image) |
@@ -89,10 +89,10 @@ A changed ConfigMap value rolls the API Pods. A changed `secrets.clanSecret` doe
 ## Package and publish the chart
 
 ```sh
-helm package infra/week7/urdnot                 # writes urdnot-0.1.1.tgz
+helm package infra/week7/urdnot                 # writes urdnot-<version>.tgz (0.2.0 now)
 helm registry login ghcr.io -u <github-user>    # token needs the write:packages scope
-helm push urdnot-0.1.1.tgz oci://ghcr.io/torehan06/charts
-helm install urdnot oci://ghcr.io/torehan06/charts/urdnot --version 0.1.1 -n urdnot-dev --create-namespace -f ...
+helm push urdnot-0.2.0.tgz oci://ghcr.io/torehan06/charts
+helm install urdnot oci://ghcr.io/torehan06/charts/urdnot --version 0.2.0 -n urdnot-dev --create-namespace -f ...
 ```
 
 A version can be pushed only once in practice: bump `version` in `Chart.yaml` for every change to the chart. Don't commit the `.tgz`.
