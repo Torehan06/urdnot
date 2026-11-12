@@ -6,7 +6,13 @@
 #     -f infra/week7/values-staging.yaml -f infra/week7/values-local.yaml
 
 api:
+  # Week 9: the autoscaler sets the number of Pods (2 to 5) from CPU usage.
+  # replicaCount is ignored while it is on.
   replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
   config:
     clanName: Urdnot (staging)
     logLevel: info

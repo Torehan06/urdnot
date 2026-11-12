@@ -1,7 +1,13 @@
 urdnot {{ .Chart.Version }} installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}" (revision {{ .Release.Revision }}).
 
   API image:  {{ include "urdnot.apiImage" . }}
-  Replicas:   {{ .Values.api.replicaCount }}
+{{- with .Values.api.autoscaling }}
+{{- if .enabled }}
+  Replicas:   {{ .minReplicas }} to {{ .maxReplicas }}, autoscaled at {{ .targetCPUUtilizationPercentage }}% CPU (kubectl -n {{ $.Release.Namespace }} get hpa)
+{{- else }}
+  Replicas:   {{ $.Values.api.replicaCount }}
+{{- end }}
+{{- end }}
   Log level:  {{ .Values.api.config.logLevel }}
 
 Watch it come up:

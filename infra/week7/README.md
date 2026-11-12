@@ -8,7 +8,7 @@ The Week 5 and 6 manifests as one Helm chart, installed once per environment. De
 | `urdnot/values.yaml` | Default values: every setting the templates read |
 | `urdnot/templates/` | The API (Service, Deployment, PodDisruptionBudget), Ingress, ConfigMap, Secret, Postgres, Redis, and `_helpers.tpl` |
 | `values-dev.yaml` | dev: 1 replica, `debug` logging, host `dev.urdnot.localhost` |
-| `values-staging.yaml` | staging: 2 replicas, `info` logging, host `staging.urdnot.localhost` |
+| `values-staging.yaml` | staging: 2 to 5 replicas set by the autoscaler (Week 9), `info` logging, host `staging.urdnot.localhost` |
 | `values-local.yaml.example` | Template for the git-ignored `values-local.yaml` (secrets, optional local image) |
 
 ## Requirements

@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from hashlib import sha256
 from html import escape
 import json
 import logging
@@ -13,13 +14,13 @@ import threading
 import time
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Cookie, FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest
 from prometheus_client.exposition import CONTENT_TYPE_LATEST
 import psycopg
 from psycopg.rows import dict_row
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import redis
 from starlette.concurrency import run_in_threadpool
 
@@ -95,6 +96,13 @@ class HollowInput(BaseModel):
     text: str
 
 
+class SessionInput(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+SESSION_COOKIE = "urdnot_session"
+
+
 def clan_secret():
     """Return the expected X-Clan-Secret, read fresh on every call.
 
@@ -119,6 +127,15 @@ def create_app():
     redis_url = os.getenv("REDIS_URL") or None
     storage_mode = "postgres" if database_url else "in-memory"
     counter_mode = "redis" if redis_url else "in-process"
+    # Where sessions live decides whether replicas are interchangeable. In
+    # Redis, any replica can serve any request (stateless). In this process's
+    # memory, only the replica that created a session knows it.
+    session_mode = "redis" if redis_url else "in-process"
+    session_ttl = int(os.getenv("SESSION_TTL_SECONDS") or 3600)
+    if session_ttl < 1:
+        raise ValueError("SESSION_TTL_SECONDS must be a positive number of seconds")
+    sessions = {}
+    hostname = socket.gethostname()
     records = {}
     headbutts = 0
     lock = threading.Lock()
@@ -173,6 +190,7 @@ def create_app():
         started = time.monotonic()
         log.info("startup", extra={"fields": {
             "storage_mode": storage_mode, "counter_mode": counter_mode,
+            "session_mode": session_mode,
         }})
         if database_url:
             try:
@@ -227,7 +245,7 @@ def create_app():
     @application.get("/", response_class=HTMLResponse)
     async def index():
         clan = escape(os.getenv("CLAN_NAME", "Urdnot"))
-        hostname = escape(socket.gethostname())
+        host = escape(hostname)
         version = escape(os.getenv("APP_VERSION", "0.1.0"))
         revision = escape(os.getenv("APP_REVISION", "unknown"))
         uptime = time.monotonic() - started
@@ -236,10 +254,10 @@ def create_app():
 <meta name="viewport" content="width=device-width, initial-scale=1"></head>
 <body style="font-family:system-ui;max-width:48rem;margin:3rem auto;padding:1rem">
 <h1>{clan}</h1><p>Serving from hostname</p>
-<strong style="font-size:clamp(2rem,6vw,4rem);overflow-wrap:anywhere">{hostname}</strong>
+<strong style="font-size:clamp(2rem,6vw,4rem);overflow-wrap:anywhere">{host}</strong>
 <p>Service: urdnot-api · Version: {version} · Revision: {revision}</p>
 <p>Uptime: {uptime:.1f} seconds</p>
-<p>Storage: {storage_mode} · Counter: {counter_mode}</p>
+<p>Storage: {storage_mode} · Counter: {counter_mode} · Sessions: {session_mode}</p>
 </body></html>"""
 
     @application.get("/api/hollows")
@@ -296,6 +314,86 @@ def create_app():
         with lock:
             headbutts += 1
             return {"count": headbutts}
+
+    def session_key(token):
+        # Redis stores a hash of the token, so reading Redis (a dump, MONITOR)
+        # doesn't reveal a value that could be replayed as a cookie.
+        return "urdnot-api:session:" + sha256(token.encode()).hexdigest()
+
+    def session_view(name, visits):
+        # served_by shows which replica answered: with sessions in Redis it
+        # changes between requests while name and visits carry on.
+        return {"name": name, "visits": visits, "served_by": hostname,
+                "store": session_mode}
+
+    @application.post("/api/session", status_code=201)
+    def create_session(item: SessionInput, response: Response):
+        token = secrets.token_urlsafe(32)
+        if redis_url:
+            try:
+                pipe = get_redis().pipeline()
+                pipe.hset(session_key(token), mapping={"name": item.name, "visits": 0})
+                pipe.expire(session_key(token), session_ttl)
+                pipe.execute()
+            except (redis.RedisError, ValueError):
+                raise HTTPException(503, detail={"dependency": "redis"}) from None
+        else:
+            with lock:
+                sessions[token] = {
+                    "name": item.name, "visits": 0,
+                    "expires": time.monotonic() + session_ttl,
+                }
+        # HttpOnly: page scripts can't read it. Add Secure once the service is
+        # only reached over HTTPS; the labs use plain HTTP.
+        response.set_cookie(SESSION_COOKIE, token, max_age=session_ttl,
+                            httponly=True, samesite="lax", path="/api")
+        return session_view(item.name, 0)
+
+    @application.get("/api/session")
+    def read_session(urdnot_session: str | None = Cookie(None)):
+        if not urdnot_session:
+            raise HTTPException(401, detail="No session")
+        if redis_url:
+            key = session_key(urdnot_session)
+            try:
+                # One MULTI/EXEC round trip. Each request counts a visit and
+                # pushes the expiry out again (a sliding timeout).
+                pipe = get_redis().pipeline()
+                pipe.hget(key, "name")
+                pipe.hincrby(key, "visits", 1)
+                pipe.expire(key, session_ttl)
+                name, visits, _ = pipe.execute()
+                if name is None:
+                    # HINCRBY created a key for an unknown or expired session.
+                    get_redis().delete(key)
+            except (redis.RedisError, ValueError):
+                raise HTTPException(503, detail={"dependency": "redis"}) from None
+            if name is None:
+                raise HTTPException(401, detail="Unknown or expired session")
+            return session_view(name.decode(), visits)
+        with lock:
+            session = sessions.get(urdnot_session)
+            if session and session["expires"] < time.monotonic():
+                del sessions[urdnot_session]
+                session = None
+            if session is None:
+                raise HTTPException(401, detail="Unknown or expired session")
+            session["visits"] += 1
+            session["expires"] = time.monotonic() + session_ttl
+            return session_view(session["name"], session["visits"])
+
+    @application.delete("/api/session", status_code=204)
+    def delete_session(response: Response, urdnot_session: str | None = Cookie(None)):
+        if urdnot_session:
+            if redis_url:
+                try:
+                    get_redis().delete(session_key(urdnot_session))
+                except (redis.RedisError, ValueError):
+                    raise HTTPException(503, detail={"dependency": "redis"}) from None
+            else:
+                with lock:
+                    sessions.pop(urdnot_session, None)
+        response.delete_cookie(SESSION_COOKIE, path="/api")
 
     @application.get("/api/charge")
     def charge(ms: int = Query(200, ge=1, le=10000)):

@@ -1,0 +1,55 @@
+# Week 9: a Pod that runs the k6 load test (load-test.js) against the API's
+# Service from inside the cluster, like the Week 8 prober. Started by
+# scripts/load-test.sh, which first creates the two ConfigMaps:
+#
+#   load-test-script    the file infra/week9/load-test.js
+#   load-test-settings  VUS, HOLD, CHARGE_MS, ... as environment variables
+#
+# The Pod runs once (restartPolicy: Never). Its exit code is k6's: 0 when all
+# thresholds held, 99 when one was missed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: load-test
+  labels:
+    app.kubernetes.io/name: load-test
+    app.kubernetes.io/part-of: urdnot
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 5
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 12345
+    runAsGroup: 12345
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: k6
+      image: grafana/k6:2.3.0@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02df56760fa0bdb0fba0b8
+      args: [run, --quiet, /scripts/load-test.js]
+      envFrom:
+        - configMapRef:
+            name: load-test-settings
+      resources:
+        # The load generator shares the node with the Pods it tests. A request
+        # keeps it from being starved; no CPU limit, so it is never throttled
+        # into reporting latency it caused itself.
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: script
+          mountPath: /scripts
+          readOnly: true
+  volumes:
+    - name: script
+      configMap:
+        name: load-test-script

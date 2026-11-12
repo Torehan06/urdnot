@@ -8,5 +8,5 @@ type: application
 # version is the chart's own version: bump it when templates or default values
 # change. appVersion is the version of the application the chart deploys and
 # is informational; the image that actually runs is set in values (api.image).
-version: 0.1.1
+version: 0.2.0
 appVersion: "0.1.0"

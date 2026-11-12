@@ -5,7 +5,22 @@
 # release name, so install one release per namespace.
 
 api:
+  # Number of Pods when autoscaling is off. Ignored when it is on.
   replicaCount: 2
+
+  # Week 9: a HorizontalPodAutoscaler changes the number of Pods between
+  # minReplicas and maxReplicas to keep average CPU usage near the target.
+  # Needs metrics-server in the cluster (k3s ships it).
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    # Percent of resources.requests.cpu, averaged over the Pods. With a
+    # 250m request, 70 means: add Pods when the average is above 175m.
+    targetCPUUtilizationPercentage: 70
+    # How long load must stay low before Pods are removed (Kubernetes'
+    # default is 300).
+    scaleDownStabilizationSeconds: 300
 
   # An image CI published from main. tag says which commit it is; digest
   # makes the reference immutable. Leave digest empty for a locally built image.
@@ -23,10 +38,16 @@ api:
   config:
     clanName: Urdnot
     logLevel: info
+    # Sessions (in Redis) expire this long after their last request.
+    sessionTtlSeconds: 3600
 
+  # requests: what the scheduler reserves on a node for each Pod, and the
+  # 100% mark for the autoscaler's CPU percentage. limits: the ceiling; above
+  # the CPU limit the container is throttled, above the memory limit it is
+  # killed. One Python process uses at most about one core, hence cpu: "1".
   resources:
     requests:
-      cpu: 100m
+      cpu: 250m
       memory: 128Mi
     limits:
       cpu: "1"
